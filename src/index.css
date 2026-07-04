@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+/* Custom utility styles for Bento grid elements */
+.bento-glow-red {
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.1);
+}
+
+.bento-glow-green {
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.1);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f0f11;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2a2f;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3f;
+}

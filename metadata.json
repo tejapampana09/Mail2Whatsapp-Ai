@@ -1,0 +1,8 @@
+{
+  "name": "Mail2WhatsApp AI",
+  "description": "Connect your inbox to classify and summarize incoming emails instantly with Gemini AI and simulate WhatsApp routing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
