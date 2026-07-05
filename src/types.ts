@@ -26,6 +26,18 @@ export interface ProcessedEmail {
   whatsappStatus: 'Sent' | 'Failed' | 'Disabled' | 'Pending';
   isRead: boolean;
   attachments?: string[];
+  aiMetadata?: {
+    actionRequired: boolean;
+    actionDetails: string | null;
+    deadline: string | null;
+    classifications: string[];
+    spamScore: number;
+    calendarEvent: {
+      title: string;
+      start: string;
+      end: string;
+    } | null;
+  } | null;
 }
 
 export interface ActivityLog {

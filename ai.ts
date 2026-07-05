@@ -6,6 +6,18 @@ export interface LLMResult {
   category: string;
   importance: 'High' | 'Medium' | 'Low';
   summary: string;
+  aiMetadata?: {
+    actionRequired: boolean;
+    actionDetails: string | null;
+    deadline: string | null;
+    classifications: string[];
+    spamScore: number;
+    calendarEvent: {
+      title: string;
+      start: string;
+      end: string;
+    } | null;
+  } | null;
 }
 
 const OPENROUTER_FALLBACK_MODELS = [
@@ -43,15 +55,27 @@ export async function analyzeEmail(
     endpoint = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
   }
 
-  const systemPrompt = `You are a professional full-stack email classification and summary AI.
+  const systemPrompt = `You are a professional email analysis and prioritization AI.
 Strictly analyze the incoming email and return a valid JSON object ONLY.
-Do not output any thinking process, explanations, reasoning, or markdown block formatting. Start directly with the opening curly brace "{" and end with "}".
+Do not output any thinking process, explanations, reasoning, or markdown formatting. Start directly with the opening curly brace "{" and end with "}".
 
 The JSON structure must be exactly:
 {
   "category": "One of: 'Important' | 'Action Required' | 'Meetings' | 'Recruiters' | 'GitHub' | 'Finance' | 'Shopping' | 'Promotions' | 'Spam' | 'Work' | 'Personal' | 'Education'",
   "importance": "One of: 'High' | 'Medium' | 'Low'",
-  "summary": "A concise, one-sentence, punchy, high-level summary of the main action point in the ${language} language."
+  "summary": "A concise, one-sentence, punchy, high-level summary of the main action point in the ${language} language.",
+  "aiMetadata": {
+    "actionRequired": true/false (true if there is a task or action required from the recipient),
+    "actionDetails": "Brief description of the action required, or null if none",
+    "deadline": "Detected deadline date/time description, or null if none",
+    "classifications": ["Array containing tags from this list if applicable: 'OTP', 'Invoice', 'Meeting', 'Recruiter', 'Scam', 'Spam'"],
+    "spamScore": 0-100 (probability score of being spam or scam),
+    "calendarEvent": {
+      "title": "Title of meeting or event",
+      "start": "ISO String or plain date string of start time",
+      "end": "ISO String or plain date string of end time"
+    } or null if no calendar event is detected
+  }
 }`;
 
   const userMessage = `From: ${from}
@@ -99,7 +123,8 @@ Body Content: ${content}`;
       return {
         category: result.category || 'Work',
         importance: result.importance || 'Medium',
-        summary: result.summary || subject
+        summary: result.summary || subject,
+        aiMetadata: result.aiMetadata || null
       };
     } catch (err: any) {
       console.error(`[AI] Google Gen AI SDK request failed:`, err.message);
@@ -176,7 +201,8 @@ Body Content: ${content}`;
       return {
         category: result.category || 'Work',
         importance: result.importance || 'Medium',
-        summary: result.summary || subject
+        summary: result.summary || subject,
+        aiMetadata: result.aiMetadata || null
       };
 
     } catch (err: any) {
@@ -233,5 +259,17 @@ export function getFallbackAnalysis(from: string, subject: string, content: stri
     summary = `Subscription digest: ${subject}`;
   }
 
-  return { category, importance, summary };
+  return {
+    category,
+    importance,
+    summary,
+    aiMetadata: {
+      actionRequired: category === 'Meetings' || category === 'Important' || category === 'Action Required',
+      actionDetails: category === 'Meetings' ? 'Attend meeting' : null,
+      deadline: null,
+      classifications: category === 'Spam' ? ['Spam'] : (category === 'Meetings' ? ['Meeting'] : (category === 'Recruiters' ? ['Recruiter'] : [])),
+      spamScore: category === 'Spam' ? 95 : 5,
+      calendarEvent: null
+    }
+  };
 }

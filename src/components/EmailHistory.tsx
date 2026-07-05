@@ -7,7 +7,11 @@ import {
   MessageSquare,
   User,
   CheckCircle2,
-  Paperclip
+  Paperclip,
+  Shield,
+  AlertTriangle,
+  Clock,
+  Calendar
 } from 'lucide-react';
 import { ProcessedEmail, EmailCategory, ImportanceLevel } from '../types';
 
@@ -181,6 +185,21 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
                           <span>{email.attachments.length}</span>
                         </span>
                       )}
+                      {email.aiMetadata?.actionRequired && (
+                        <span className="bg-amber-950/60 text-amber-300 border border-amber-900/50 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded">ACTION REQ</span>
+                      )}
+                      {email.aiMetadata?.classifications?.map((tag) => (
+                        <span key={tag} className={`text-[9px] font-mono font-semibold px-1.5 py-0.5 rounded border ${
+                          tag === 'OTP' ? 'bg-emerald-950/60 text-emerald-400 border-emerald-900/50' :
+                          tag === 'Invoice' ? 'bg-yellow-950/60 text-yellow-400 border-yellow-900/50' :
+                          tag === 'Meeting' ? 'bg-teal-950/60 text-teal-400 border-teal-900/50' :
+                          tag === 'Recruiter' ? 'bg-blue-950/60 text-blue-400 border-blue-900/50' :
+                          tag === 'Scam' || tag === 'Spam' ? 'bg-rose-950/60 text-rose-400 border-rose-900/50 animate-pulse' :
+                          'bg-neutral-800 text-neutral-300 border-neutral-700'
+                        }`}>
+                          {tag}
+                        </span>
+                      ))}
                     </div>
 
                     <div className="space-y-1">
@@ -296,6 +315,57 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* AI Extra Insights Block */}
+            {selectedEmail.aiMetadata && (
+              <div className="space-y-4 border-t border-[#222222] pt-4 text-left">
+                <div className="flex items-center space-x-2 text-[#888888] font-mono text-xs uppercase border-b border-[#222222] pb-1.5">
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>AI Security & Action Insights</span>
+                </div>
+                
+                {/* Spam/Scam High Score warning */}
+                {selectedEmail.aiMetadata.spamScore > 50 && (
+                  <div className="bg-rose-950/20 border border-rose-900/50 rounded-xl p-3.5 flex items-start space-x-2.5">
+                    <AlertTriangle className="w-4.5 h-4.5 text-rose-400 shrink-0 mt-0.5" />
+                    <div className="text-xs">
+                      <p className="text-rose-400 font-bold">High Risk Spam/Scam Probability ({selectedEmail.aiMetadata.spamScore}%)</p>
+                      <p className="text-stone-300 text-[11px] mt-0.5">Gemini detected indicators of phishing, scam, or spam contents. Exercise caution with any actions.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Action Item and Deadline */}
+                {selectedEmail.aiMetadata.actionRequired && (
+                  <div className="bg-amber-950/20 border border-amber-900/50 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center space-x-2">
+                      <Clock className="w-4 h-4 text-amber-400" />
+                      <span className="text-amber-400 font-bold text-xs">Action Required Detected</span>
+                    </div>
+                    <div className="text-xs text-stone-200 pl-6 space-y-1">
+                      <p><strong className="text-[#888888]">Task:</strong> {selectedEmail.aiMetadata.actionDetails || 'Follow up required'}</p>
+                      {selectedEmail.aiMetadata.deadline && (
+                        <p><strong className="text-[#888888]">Deadline:</strong> <span className="bg-amber-500/10 text-amber-300 px-1.5 py-0.5 rounded font-mono text-[10px]">{selectedEmail.aiMetadata.deadline}</span></p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Calendar Event */}
+                {selectedEmail.aiMetadata.calendarEvent && (
+                  <div className="bg-teal-950/20 border border-teal-900/50 rounded-xl p-3.5 space-y-2">
+                    <div className="flex items-center space-x-2">
+                      <Calendar className="w-4 h-4 text-teal-400" />
+                      <span className="text-teal-400 font-bold text-xs">Calendar Event / Meeting</span>
+                    </div>
+                    <div className="text-xs text-stone-200 pl-6 space-y-1">
+                      <p><strong className="text-[#888888]">Event:</strong> {selectedEmail.aiMetadata.calendarEvent.title}</p>
+                      <p><strong className="text-[#888888]">Time:</strong> {selectedEmail.aiMetadata.calendarEvent.start} to {selectedEmail.aiMetadata.calendarEvent.end}</p>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

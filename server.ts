@@ -505,6 +505,7 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
     let category = 'Work';
     let importance: 'High' | 'Medium' | 'Low' = 'Medium';
     let summary = rawEmail.snippet || '(No Content)';
+    let aiMetadata: any = null;
     try {
       const analysis = await analyzeEmail(
         rawEmail.from,
@@ -517,6 +518,7 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
       category = analysis.category;
       importance = analysis.importance;
       summary = analysis.summary;
+      aiMetadata = analysis.aiMetadata || null;
     } catch (err: any) {
       console.error(`AI analysis failed for email ${rawEmail.id}:`, err);
       await addLog(userId, 'WARNING', 'AI_FAIL', `LLM analysis failed: ${err.message}. Running rule fallback parser.`);
@@ -524,6 +526,7 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
       category = fallback.category;
       importance = fallback.importance;
       summary = fallback.summary;
+      aiMetadata = fallback.aiMetadata || null;
     }
 
     // Skip if category is ignored
@@ -563,8 +566,8 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
     // Update DB record with final analysis results
     const db = await getDb();
     await db.run(
-      `UPDATE emails SET category=?, importance=?, summary=?, whatsapp_status=?, whatsapp_message_id=?, delivery_error=? WHERE id=?`,
-      category, importance, summary, whatsappStatus, whatsappMsgId || null, deliveryErr || null, emailRecordId
+      `UPDATE emails SET category=?, importance=?, summary=?, whatsapp_status=?, whatsapp_message_id=?, delivery_error=?, ai_metadata=? WHERE id=?`,
+      category, importance, summary, whatsappStatus, whatsappMsgId || null, deliveryErr || null, aiMetadata ? JSON.stringify(aiMetadata) : null, emailRecordId
     );
 
     // Mark as read in Gmail

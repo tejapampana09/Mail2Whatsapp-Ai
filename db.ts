@@ -120,9 +120,21 @@ export async function initDb(): Promise<Database> {
       is_read INTEGER NOT NULL, -- 0 or 1
       created_at TEXT NOT NULL,
       attachments TEXT, -- JSON array of filenames
+      ai_metadata TEXT, -- JSON serialized metadata containing Action Required, deadlines, etc.
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+
+  // Database Schema Migrations (Add columns if missing for existing databases)
+  try {
+    await db.run('ALTER TABLE emails ADD COLUMN ai_metadata TEXT');
+    console.log('Database schema migrated: Added ai_metadata column.');
+  } catch (err: any) {
+    // Ignore error if column already exists
+    if (!err.message.includes('duplicate column name') && !err.message.includes('already exists')) {
+      console.warn('Database schema migration warning:', err.message);
+    }
+  }
 
   // Create Execution Logs Table
   await db.exec(`
@@ -349,6 +361,7 @@ export async function getEmails(userId: string) {
     deliveryError: r.delivery_error,
     isRead: !!r.is_read,
     attachments: r.attachments ? JSON.parse(r.attachments) : [],
+    aiMetadata: r.ai_metadata ? JSON.parse(r.ai_metadata) : null,
   }));
 }
 
@@ -377,13 +390,14 @@ export async function addEmail(userId: string, email: {
   delivery_error?: string;
   is_read?: boolean;
   attachments?: string[];
+  ai_metadata?: any;
 }) {
   const database = await getDb();
   const now = new Date().toISOString();
   const emailId = email.id || 'email_' + Math.random().toString(36).substring(2, 11);
   await database.run(
-    `INSERT INTO emails (id, user_id, gmail_message_id, from_address, subject, content, summary, category, importance, date, whatsapp_status, whatsapp_message_id, delivery_error, is_read, created_at, attachments)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO emails (id, user_id, gmail_message_id, from_address, subject, content, summary, category, importance, date, whatsapp_status, whatsapp_message_id, delivery_error, is_read, created_at, attachments, ai_metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     emailId,
     userId,
     email.gmail_message_id || null,
@@ -399,7 +413,8 @@ export async function addEmail(userId: string, email: {
     email.delivery_error || null,
     email.is_read ? 1 : 0,
     now,
-    email.attachments ? JSON.stringify(email.attachments) : '[]'
+    email.attachments ? JSON.stringify(email.attachments) : '[]',
+    email.ai_metadata ? JSON.stringify(email.ai_metadata) : null
   );
   return emailId;
 }
