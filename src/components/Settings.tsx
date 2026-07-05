@@ -154,7 +154,8 @@ export default function Settings({ settings, onSave }: SettingsProps) {
   };
 
   const handleAddAccountClick = () => {
-    window.location.href = `/api/auth/google/add-account?token=${localStorage.getItem('mail2whatsapp_token')}`;
+    const token = localStorage.getItem('mail2whatsapp_token');
+    window.location.href = `/api/auth/google/add-account?token=${token}`;
   };
 
   const categories = [

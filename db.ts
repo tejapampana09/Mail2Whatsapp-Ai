@@ -300,6 +300,7 @@ export async function getAllGoogleTokens(userId: string) {
 // Save additional Gmail account token (multi-account)
 export async function saveGoogleAccountToken(token: {
   userId: string;
+  provider: string;
   gmailEmail: string;
   access_token: string;
   refresh_token?: string;
@@ -314,7 +315,7 @@ export async function saveGoogleAccountToken(token: {
   // Check if this Gmail email is already connected for this user
   const existing = await database.get(
     'SELECT id FROM oauth_tokens WHERE user_id = ? AND provider = ? AND gmail_email = ?',
-    token.userId, 'google', token.gmailEmail
+    token.userId, token.provider, token.gmailEmail
   );
 
   if (existing) {
