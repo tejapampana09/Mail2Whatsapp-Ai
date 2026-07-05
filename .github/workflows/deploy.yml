@@ -26,7 +26,8 @@ jobs:
             echo "🚀 Starting deployment..."
             cd /home/ubuntu/mail2whatsapp-ai
 
-            echo "📥 Pulling latest changes from GitHub..."
+            echo "📥 Resetting any local changes and pulling latest changes from GitHub..."
+            git reset --hard
             git pull origin master
 
             echo "📦 Installing dependencies..."
