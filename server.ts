@@ -43,6 +43,7 @@ import {
 import {
   sendWhatsAppAlert,
   sendWhatsAppDigest,
+  sendWhatsAppVoiceSummary,
   checkWhatsAppConfig
 } from './whatsapp.ts';
 
@@ -555,6 +556,14 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
         deliveryErr = pushResult.error;
         if (pushResult.status === 'Sent') {
           await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `WhatsApp notification dispatched successfully (ID: ${pushResult.messageId}).`);
+          // Send voice summary for High priority emails if enabled
+          if (importance === 'High' && process.env.WHATSAPP_VOICE_ENABLED === 'true') {
+            const voiceText = `Urgent email. From ${rawEmail.from.split('<')[0].trim()}. Subject: ${rawEmail.subject}. Summary: ${summary}`;
+            sendWhatsAppVoiceSummary(settings.whatsapp_number, voiceText).then(vr => {
+              if (vr.status === 'Sent') console.log('[Voice] Voice summary sent.');
+              else console.warn('[Voice] Voice summary failed:', vr.error);
+            });
+          }
         } else {
           await addLog(userId, 'ERROR', 'WHATSAPP_PUSH', `WhatsApp notification delivery failed: ${pushResult.error}`);
         }

@@ -297,3 +297,105 @@ export function checkWhatsAppConfig(): boolean {
   const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   return !!(token && phoneId && !token.includes('replace_me') && !phoneId.includes('replace_me'));
 }
+
+// ----------------------------------------------------
+// Voice Summary — Google TTS + WhatsApp Audio Upload
+// ----------------------------------------------------
+export async function sendWhatsAppVoiceSummary(
+  toNumber: string,
+  text: string
+): Promise<WhatsAppSendResult> {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const googleApiKey = process.env.LLM_API_KEY;
+
+  if (!token || !phoneId || token.includes('replace_me')) {
+    return { status: 'Failed', error: 'WhatsApp credentials not configured.' };
+  }
+
+  if (!googleApiKey || googleApiKey.includes('replace_me')) {
+    return { status: 'Failed', error: 'Google TTS API key not configured.' };
+  }
+
+  const cleanNumber = normalizeWhatsAppNumber(toNumber);
+  if (!cleanNumber) return { status: 'Failed', error: 'Invalid phone number.' };
+
+  try {
+    // Step 1: Generate audio via Google Cloud TTS (REST API)
+    const ttsText = text.length > 500 ? text.substring(0, 497) + '...' : text;
+    const ttsRes = await fetch(
+      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleApiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input: { text: ttsText },
+          voice: { languageCode: 'en-IN', name: 'en-IN-Wavenet-D', ssmlGender: 'MALE' },
+          audioConfig: { audioEncoding: 'OGG_OPUS', speakingRate: 1.1 }
+        })
+      }
+    );
+
+    if (!ttsRes.ok) {
+      const errText = await ttsRes.text();
+      throw new Error(`Google TTS failed: ${errText}`);
+    }
+
+    const ttsData: any = await ttsRes.json();
+    const audioBase64 = ttsData.audioContent;
+    if (!audioBase64) throw new Error('Empty audio response from Google TTS.');
+
+    const audioBuffer = Buffer.from(audioBase64, 'base64');
+
+    // Step 2: Upload audio to WhatsApp Media API
+    const { FormData, Blob } = await import('node:buffer').then(() => {
+      // Use native fetch FormData (Node 18+) or construct manually
+      return { FormData: globalThis.FormData, Blob: globalThis.Blob };
+    }).catch(() => ({ FormData: null, Blob: null }));
+
+    const uploadUrl = `https://graph.facebook.com/v20.0/${phoneId}/media`;
+    const uploadFormData = new (globalThis.FormData)();
+    uploadFormData.append('messaging_product', 'whatsapp');
+    uploadFormData.append('type', 'audio/ogg');
+    uploadFormData.append('file', new Blob([audioBuffer], { type: 'audio/ogg' }), 'summary.ogg');
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: uploadFormData
+    });
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text();
+      throw new Error(`WhatsApp media upload failed: ${errText}`);
+    }
+
+    const uploadData: any = await uploadRes.json();
+    const mediaId = uploadData?.id;
+    if (!mediaId) throw new Error('No media ID returned from WhatsApp upload.');
+
+    // Step 3: Send audio message using media_id
+    const sendRes = await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: cleanNumber,
+        type: 'audio',
+        audio: { id: mediaId }
+      })
+    });
+
+    if (!sendRes.ok) {
+      const errText = await sendRes.text();
+      throw new Error(`WhatsApp audio send failed: ${errText}`);
+    }
+
+    const sendData: any = await sendRes.json();
+    return { status: 'Sent', messageId: sendData?.messages?.[0]?.id };
+  } catch (err: any) {
+    console.error('[Voice] Voice summary failed:', err.message);
+    return { status: 'Failed', error: err.message };
+  }
+}
