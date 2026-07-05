@@ -254,36 +254,30 @@ export function getFallbackAnalysis(from: string, subject: string, content: stri
 
   let category = 'Work';
   let importance: 'High' | 'Medium' | 'Low' = 'Medium';
-  let summary = subject;
+  // Default summary is a snippet of the content
+  let summary = content.substring(0, 150) + (content.length > 150 ? '...' : '');
 
   if (lowerSubject.includes('fraud') || lowerSubject.includes('blocked') || lowerSubject.includes('charge') || lowerSubject.includes('billing')) {
     category = 'Finance';
     importance = 'High';
-    summary = `Billing alert: ${subject}`;
   } else if (lowerSubject.includes('security') || lowerSubject.includes('alert') || lowerSubject.includes('leaked') || lowerFrom.includes('github')) {
     category = 'GitHub';
     importance = 'High';
-    summary = `Security Alert from Github: ${subject}`;
   } else if (lowerSubject.includes('shipped') || lowerSubject.includes('order') || lowerSubject.includes('amazon')) {
     category = 'Shopping';
     importance = 'Low';
-    summary = `Delivery Update: ${subject}`;
   } else if (lowerSubject.includes('meeting') || lowerSubject.includes('kickoff') || lowerSubject.includes('schedule') || lowerSubject.includes('rescheduled')) {
     category = 'Meetings';
     importance = 'High';
-    summary = `Meeting update: ${subject}`;
   } else if (lowerSubject.includes('recruiter') || lowerSubject.includes('career') || lowerSubject.includes('job opportunity') || lowerSubject.includes('hiring')) {
     category = 'Recruiters';
     importance = 'Medium';
-    summary = `Recruiting query: ${subject}`;
   } else if (lowerSubject.includes('free') || lowerSubject.includes('lottery') || lowerSubject.includes('bitcoin') || lowerSubject.includes('claim') || lowerContent.includes('lottery') || lowerContent.includes('win free')) {
     category = 'Spam';
     importance = 'Low';
-    summary = `Spam folder match: ${subject}`;
   } else if (lowerSubject.includes('newsletter') || lowerSubject.includes('weekly') || lowerSubject.includes('medium')) {
     category = 'Education';
     importance = 'Low';
-    summary = `Subscription digest: ${subject}`;
   }
 
   return {
