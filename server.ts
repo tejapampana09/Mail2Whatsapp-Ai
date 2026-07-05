@@ -131,7 +131,12 @@ export interface AuthenticatedRequest extends express.Request {
 
 function authenticateToken(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  let token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+  // Fallback to query parameter for browser redirects (e.g. add-account redirect)
+  if (!token && req.query.token) {
+    token = req.query.token as string;
+  }
 
   if (!token) {
     return res.status(401).json({ error: 'Session token required. Please log in.' });
