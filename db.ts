@@ -130,9 +130,18 @@ export async function initDb(): Promise<Database> {
     await db.run('ALTER TABLE emails ADD COLUMN ai_metadata TEXT');
     console.log('Database schema migrated: Added ai_metadata column.');
   } catch (err: any) {
-    // Ignore error if column already exists
     if (!err.message.includes('duplicate column name') && !err.message.includes('already exists')) {
       console.warn('Database schema migration warning:', err.message);
+    }
+  }
+
+  // Migration: Add gmail_email to oauth_tokens for multi-account support
+  try {
+    await db.run('ALTER TABLE oauth_tokens ADD COLUMN gmail_email TEXT');
+    console.log('Database schema migrated: Added gmail_email column to oauth_tokens.');
+  } catch (err: any) {
+    if (!err.message.includes('duplicate column name') && !err.message.includes('already exists')) {
+      console.warn('Database schema migration warning (gmail_email):', err.message);
     }
   }
 
@@ -269,6 +278,68 @@ export async function saveOAuthToken(token: {
 export async function deleteOAuthToken(userId: string, provider = 'google') {
   const database = await getDb();
   await database.run('DELETE FROM oauth_tokens WHERE user_id = ? AND provider = ?', userId, provider);
+}
+
+// Get all Google OAuth tokens for a user (multi-account)
+export async function getAllGoogleTokens(userId: string) {
+  const database = await getDb();
+  const rows = await database.all(
+    'SELECT * FROM oauth_tokens WHERE user_id = ? AND provider = ? ORDER BY created_at ASC',
+    userId,
+    'google'
+  );
+  return rows.map(r => ({
+    id: r.id,
+    gmailEmail: r.gmail_email || null,
+    refreshToken: r.refresh_token ? decryptText(r.refresh_token) : null,
+    accessToken: r.access_token,
+    createdAt: r.created_at
+  }));
+}
+
+// Save additional Gmail account token (multi-account)
+export async function saveGoogleAccountToken(token: {
+  userId: string;
+  gmailEmail: string;
+  access_token: string;
+  refresh_token?: string;
+  expiry_date?: number;
+  scope?: string;
+  token_type?: string;
+}) {
+  const database = await getDb();
+  const now = new Date().toISOString();
+  const encryptedRefresh = token.refresh_token ? encryptText(token.refresh_token) : null;
+
+  // Check if this Gmail email is already connected for this user
+  const existing = await database.get(
+    'SELECT id FROM oauth_tokens WHERE user_id = ? AND provider = ? AND gmail_email = ?',
+    token.userId, 'google', token.gmailEmail
+  );
+
+  if (existing) {
+    await database.run(
+      `UPDATE oauth_tokens SET access_token=?, refresh_token=COALESCE(?,refresh_token), expiry_date=?, updated_at=? WHERE id=?`,
+      token.access_token, encryptedRefresh, token.expiry_date || null, now, existing.id
+    );
+  } else {
+    const tokenId = 'tok_' + Math.random().toString(36).substring(2, 11);
+    await database.run(
+      `INSERT INTO oauth_tokens (id, user_id, provider, gmail_email, access_token, refresh_token, expiry_date, scope, token_type, created_at, updated_at)
+       VALUES (?, ?, 'google', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      tokenId, token.userId, token.gmailEmail, token.access_token, encryptedRefresh,
+      token.expiry_date || null, token.scope || null, token.token_type || null, now, now
+    );
+  }
+}
+
+// Delete a specific Gmail account token by its row id
+export async function deleteGoogleAccountToken(userId: string, tokenId: string) {
+  const database = await getDb();
+  await database.run(
+    'DELETE FROM oauth_tokens WHERE id = ? AND user_id = ?',
+    tokenId, userId
+  );
 }
 
 // Settings DB Methods

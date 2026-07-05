@@ -14,6 +14,9 @@ import {
   getOAuthToken,
   saveOAuthToken,
   deleteOAuthToken,
+  getAllGoogleTokens,
+  saveGoogleAccountToken,
+  deleteGoogleAccountToken,
   getSettings,
   saveSettings,
   getEmails,
@@ -242,6 +245,28 @@ app.get('/api/auth/google/callback', async (req, res) => {
     // Write log
     await addLog(userId, 'INFO', 'GOOGLE_OAUTH', `User "${userEmail}" connected successfully via Google OAuth.`);
 
+    // Check if this is an "add additional account" flow
+    const state = req.query.state as string || '';
+    if (state.startsWith('add_account:')) {
+      const existingUserId = state.split(':')[1];
+      if (existingUserId) {
+        // Save as additional Gmail account token for the existing user
+        await saveGoogleAccountToken({
+          userId: existingUserId,
+          gmailEmail: userEmail,
+          access_token: accessToken,
+          refresh_token: tokens.refresh_token || undefined,
+          expiry_date: tokens.expiry_date || undefined,
+          scope: tokens.scope || undefined,
+          token_type: tokens.token_type || undefined
+        });
+        await addLog(existingUserId, 'INFO', 'GOOGLE_OAUTH', `Additional Gmail account "${userEmail}" connected.`);
+        // Return to dashboard without changing JWT
+        const existingJwt = req.cookies?.token || '';
+        return res.redirect(`/?token=${existingJwt}&account_added=true`);
+      }
+    }
+
     // Redirect to frontend dashboard with token
     res.redirect(`/?token=${jwtToken}`);
   } catch (err: any) {
@@ -260,8 +285,21 @@ app.get('/api/health', (_req, res) => {
 });
 
 // ----------------------------------------------------
-// Secured API Endpoints (Required JWT Authentication)
+// Gmail Multi-Account OAuth — Connect Additional Account
 // ----------------------------------------------------
+app.get('/api/auth/google/add-account', authenticateToken, (req: AuthenticatedRequest, res) => {
+  try {
+    // Pass current user's JWT as state so callback knows to ADD, not replace
+    const authUrl = getAuthUrl();
+    // Append state to tell callback this is an add-account flow
+    const urlWithState = authUrl + `&state=add_account:${req.user!.id}`;
+    res.redirect(urlWithState);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Cannot generate Google OAuth URL.' });
+  }
+});
+
+
 
 app.get('/api/auth/me', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
@@ -280,6 +318,32 @@ app.get('/api/auth/me', authenticateToken, async (req: AuthenticatedRequest, res
       ...user,
       googleConnected
     });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List all connected Gmail accounts for current user
+app.get('/api/gmail/accounts', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const accounts = await getAllGoogleTokens(req.user!.id);
+    res.json(accounts.map(a => ({
+      id: a.id,
+      email: a.gmailEmail || req.user!.email,
+      connectedAt: a.createdAt,
+      isPrimary: !a.gmailEmail
+    })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove a specific Gmail account connection
+app.delete('/api/gmail/accounts/:tokenId', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { tokenId } = req.params;
+    await deleteGoogleAccountToken(req.user!.id, tokenId);
+    res.json({ success: true, message: 'Gmail account removed.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -462,9 +526,18 @@ app.post('/api/sync', authenticateToken, async (req: AuthenticatedRequest, res) 
 async function runSyncForUser(userId: string): Promise<{ added: number; skipped: number }> {
   await addLog(userId, 'INFO', 'GMAIL_POLL', 'Querying Gmail API check for new unread messages...');
 
-  const token = await getOAuthToken(userId);
-  if (!token || !token.refresh_token) {
-    await addLog(userId, 'ERROR', 'GMAIL_POLL', 'Gmail poll cancelled: Google account is not connected.');
+  // Support multiple connected Gmail accounts
+  const allTokens = await getAllGoogleTokens(userId);
+  // Also check legacy single-token row (gmail_email may be null for old rows)
+  if (allTokens.length === 0) {
+    const legacyToken = await getOAuthToken(userId);
+    if (legacyToken?.refresh_token) {
+      allTokens.push({ id: legacyToken.id, gmailEmail: null, refreshToken: legacyToken.refresh_token, accessToken: legacyToken.access_token, createdAt: legacyToken.created_at });
+    }
+  }
+
+  if (allTokens.length === 0) {
+    await addLog(userId, 'ERROR', 'GMAIL_POLL', 'Gmail poll cancelled: No Google account connected.');
     throw new Error('Google Account is not connected. Re-auth via Settings page.');
   }
 
@@ -473,120 +546,129 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
     throw new Error('User settings missing. Reset application settings.');
   }
 
-  const emailsList = await fetchUnreadEmails(token.refresh_token, settings.analyze_limit);
   let added = 0;
   let skipped = 0;
 
-  for (const rawEmail of emailsList) {
-    // Skip already-processed emails (duplicate guard by gmail_message_id)
-    if (rawEmail.id) {
-      const alreadyExists = await emailExistsByGmailId(userId, rawEmail.id);
-      if (alreadyExists) {
+  // Loop over each connected Gmail account and fetch emails
+  for (const accountToken of allTokens) {
+    if (!accountToken.refreshToken) continue;
+    const emailsList = await fetchUnreadEmails(accountToken.refreshToken, settings.analyze_limit);
+    const accountLabel = accountToken.gmailEmail ? ` [${accountToken.gmailEmail}]` : '';
+    if (emailsList.length > 0) {
+      await addLog(userId, 'INFO', 'GMAIL_POLL', `Fetched ${emailsList.length} unread email(s) from account${accountLabel}.`);
+    }
+
+    for (const rawEmail of emailsList) {
+      // Skip already-processed emails (duplicate guard by gmail_message_id)
+      if (rawEmail.id) {
+        const alreadyExists = await emailExistsByGmailId(userId, rawEmail.id);
+        if (alreadyExists) {
+          skipped++;
+          continue;
+        }
+      }
+
+      await addLog(userId, 'INFO', 'AI_ANALYSIS', `Analyzing incoming message from "${rawEmail.from}"...`);
+
+      // Save to DB IMMEDIATELY to prevent re-processing even if AI or WhatsApp fails
+      const emailRecordId = await addEmail(userId, {
+        gmail_message_id: rawEmail.id,
+        from: rawEmail.from,
+        subject: rawEmail.subject,
+        content: rawEmail.body || rawEmail.snippet,
+        summary: rawEmail.snippet || '(Processing...)',
+        category: 'Work',
+        importance: 'Medium',
+        date: rawEmail.date,
+        whatsapp_status: 'Pending',
+        is_read: false,
+        attachments: rawEmail.attachments
+      });
+
+      // AI Analysis (with rule-based fallback)
+      let category = 'Work';
+      let importance: 'High' | 'Medium' | 'Low' = 'Medium';
+      let summary = rawEmail.snippet || '(No Content)';
+      let aiMetadata: any = null;
+      try {
+        const analysis = await analyzeEmail(
+          rawEmail.from,
+          rawEmail.subject,
+          rawEmail.body || rawEmail.snippet,
+          settings.language,
+          settings.ai_provider,
+          settings.ai_model
+        );
+        category = analysis.category;
+        importance = analysis.importance;
+        summary = analysis.summary;
+        aiMetadata = analysis.aiMetadata || null;
+      } catch (err: any) {
+        console.error(`AI analysis failed for email ${rawEmail.id}:`, err);
+        await addLog(userId, 'WARNING', 'AI_FAIL', `LLM analysis failed: ${err.message}. Running rule fallback parser.`);
+        const fallback = getFallbackAnalysis(rawEmail.from, rawEmail.subject, rawEmail.body || rawEmail.snippet);
+        category = fallback.category;
+        importance = fallback.importance;
+        summary = fallback.summary;
+        aiMetadata = fallback.aiMetadata || null;
+      }
+
+      // Skip if category is ignored
+      if (settings.ignored_categories.includes(category)) {
+        await addLog(userId, 'WARNING', 'OMIT_FILTER', `Omitted message from "${rawEmail.from}" (category "${category}" is ignored).`);
+        try { await markEmailAsRead(accountToken.refreshToken, rawEmail.id); } catch (_) {}
         skipped++;
         continue;
       }
-    }
 
-    await addLog(userId, 'INFO', 'AI_ANALYSIS', `Analyzing incoming message from "${rawEmail.from}"...`);
-
-    // Save to DB IMMEDIATELY to prevent re-processing even if AI or WhatsApp fails
-    const emailRecordId = await addEmail(userId, {
-      gmail_message_id: rawEmail.id,
-      from: rawEmail.from,
-      subject: rawEmail.subject,
-      content: rawEmail.body || rawEmail.snippet,
-      summary: rawEmail.snippet || '(Processing...)',
-      category: 'Work',
-      importance: 'Medium',
-      date: rawEmail.date,
-      whatsapp_status: 'Pending',
-      is_read: false,
-      attachments: rawEmail.attachments
-    });
-
-    // AI Analysis (with rule-based fallback)
-    let category = 'Work';
-    let importance: 'High' | 'Medium' | 'Low' = 'Medium';
-    let summary = rawEmail.snippet || '(No Content)';
-    let aiMetadata: any = null;
-    try {
-      const analysis = await analyzeEmail(
-        rawEmail.from,
-        rawEmail.subject,
-        rawEmail.body || rawEmail.snippet,
-        settings.language,
-        settings.ai_provider,
-        settings.ai_model
-      );
-      category = analysis.category;
-      importance = analysis.importance;
-      summary = analysis.summary;
-      aiMetadata = analysis.aiMetadata || null;
-    } catch (err: any) {
-      console.error(`AI analysis failed for email ${rawEmail.id}:`, err);
-      await addLog(userId, 'WARNING', 'AI_FAIL', `LLM analysis failed: ${err.message}. Running rule fallback parser.`);
-      const fallback = getFallbackAnalysis(rawEmail.from, rawEmail.subject, rawEmail.body || rawEmail.snippet);
-      category = fallback.category;
-      importance = fallback.importance;
-      summary = fallback.summary;
-      aiMetadata = fallback.aiMetadata || null;
-    }
-
-    // Skip if category is ignored
-    if (settings.ignored_categories.includes(category)) {
-      await addLog(userId, 'WARNING', 'OMIT_FILTER', `Omitted message from "${rawEmail.from}" (category "${category}" is ignored).`);
-      try { await markEmailAsRead(token.refresh_token, rawEmail.id); } catch (_) {}
-      skipped++;
-      continue;
-    }
-
-    // WhatsApp Push Alert
-    let whatsappStatus = 'Disabled';
-    let whatsappMsgId: string | undefined = undefined;
-    let deliveryErr: string | undefined = undefined;
-    const importanceThresholds: Record<string, number> = { Low: 1, Medium: 2, High: 3 };
-    const thresholdVal = importanceThresholds[settings.importance_threshold] || 2;
-    const emailImportanceVal = importanceThresholds[importance] || 2;
-    if (settings.whatsapp_notifications_enabled && emailImportanceVal >= thresholdVal && settings.whatsapp_number) {
-      try {
-        await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `Urgent alert triggered. Routing alert summary to WhatsApp number ${settings.whatsapp_number}...`);
-        const pushResult = await sendWhatsAppAlert(settings.whatsapp_number, { from: rawEmail.from, subject: rawEmail.subject, category, importance, summary }, aiMetadata);
-        whatsappStatus = pushResult.status;
-        whatsappMsgId = pushResult.messageId;
-        deliveryErr = pushResult.error;
-        if (pushResult.status === 'Sent') {
-          await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `WhatsApp notification dispatched successfully (ID: ${pushResult.messageId}).`);
-          // Send voice summary for High priority emails if enabled
-          if (importance === 'High' && process.env.WHATSAPP_VOICE_ENABLED === 'true') {
-            const voiceText = `Urgent email. From ${rawEmail.from.split('<')[0].trim()}. Subject: ${rawEmail.subject}. Summary: ${summary}`;
-            sendWhatsAppVoiceSummary(settings.whatsapp_number, voiceText).then(vr => {
-              if (vr.status === 'Sent') console.log('[Voice] Voice summary sent.');
-              else console.warn('[Voice] Voice summary failed:', vr.error);
-            });
+      // WhatsApp Push Alert
+      let whatsappStatus = 'Disabled';
+      let whatsappMsgId: string | undefined = undefined;
+      let deliveryErr: string | undefined = undefined;
+      const importanceThresholds: Record<string, number> = { Low: 1, Medium: 2, High: 3 };
+      const thresholdVal = importanceThresholds[settings.importance_threshold] || 2;
+      const emailImportanceVal = importanceThresholds[importance] || 2;
+      if (settings.whatsapp_notifications_enabled && emailImportanceVal >= thresholdVal && settings.whatsapp_number) {
+        try {
+          await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `Urgent alert triggered. Routing alert summary to WhatsApp number ${settings.whatsapp_number}...`);
+          const pushResult = await sendWhatsAppAlert(settings.whatsapp_number, { from: rawEmail.from, subject: rawEmail.subject, category, importance, summary }, aiMetadata);
+          whatsappStatus = pushResult.status;
+          whatsappMsgId = pushResult.messageId;
+          deliveryErr = pushResult.error;
+          if (pushResult.status === 'Sent') {
+            await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `WhatsApp notification dispatched successfully (ID: ${pushResult.messageId}).`);
+            // Send voice summary for High priority emails if enabled
+            if (importance === 'High' && process.env.WHATSAPP_VOICE_ENABLED === 'true') {
+              const voiceText = `Urgent email. From ${rawEmail.from.split('<')[0].trim()}. Subject: ${rawEmail.subject}. Summary: ${summary}`;
+              sendWhatsAppVoiceSummary(settings.whatsapp_number, voiceText).then(vr => {
+                if (vr.status === 'Sent') console.log('[Voice] Voice summary sent.');
+                else console.warn('[Voice] Voice summary failed:', vr.error);
+              });
+            }
+          } else {
+            await addLog(userId, 'ERROR', 'WHATSAPP_PUSH', `WhatsApp notification delivery failed: ${pushResult.error}`);
           }
-        } else {
-          await addLog(userId, 'ERROR', 'WHATSAPP_PUSH', `WhatsApp notification delivery failed: ${pushResult.error}`);
+        } catch (waErr: any) {
+          whatsappStatus = 'Failed';
+          deliveryErr = waErr.message || 'WhatsApp routing exception';
+          await addLog(userId, 'ERROR', 'WHATSAPP_PUSH', `WhatsApp routing system failed: ${deliveryErr}`);
         }
-      } catch (waErr: any) {
-        whatsappStatus = 'Failed';
-        deliveryErr = waErr.message || 'WhatsApp routing exception';
-        await addLog(userId, 'ERROR', 'WHATSAPP_PUSH', `WhatsApp routing system failed: ${deliveryErr}`);
       }
-    }
 
-    // Update DB record with final analysis results
-    const db = await getDb();
-    await db.run(
-      `UPDATE emails SET category=?, importance=?, summary=?, whatsapp_status=?, whatsapp_message_id=?, delivery_error=?, ai_metadata=? WHERE id=?`,
-      category, importance, summary, whatsappStatus, whatsappMsgId || null, deliveryErr || null, aiMetadata ? JSON.stringify(aiMetadata) : null, emailRecordId
-    );
+      // Update DB record with final analysis results
+      const db = await getDb();
+      await db.run(
+        `UPDATE emails SET category=?, importance=?, summary=?, whatsapp_status=?, whatsapp_message_id=?, delivery_error=?, ai_metadata=? WHERE id=?`,
+        category, importance, summary, whatsappStatus, whatsappMsgId || null, deliveryErr || null, aiMetadata ? JSON.stringify(aiMetadata) : null, emailRecordId
+      );
 
-    // Mark as read in Gmail
-    try { await markEmailAsRead(token.refresh_token, rawEmail.id); } catch (_) {}
+      // Mark as read in Gmail
+      try { await markEmailAsRead(accountToken.refreshToken, rawEmail.id); } catch (_) {}
 
-    await addLog(userId, 'INFO', 'ROUTER_MATCH', `Email synced & logged under [Category: ${category} | Priority: ${importance}].`);
-    added++;
-  }
+      await addLog(userId, 'INFO', 'ROUTER_MATCH', `Email synced & logged under [Category: ${category} | Priority: ${importance}].`);
+      added++;
+    } // end for rawEmail
+  } // end for accountToken
 
   await addLog(userId, 'INFO', 'GMAIL_POLL', `Sync complete. ${added} emails added, ${skipped} skipped.`);
   return { added, skipped };
