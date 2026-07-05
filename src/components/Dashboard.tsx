@@ -3,7 +3,6 @@ import {
   Mail,
   AlertTriangle,
   RefreshCw,
-  Layers,
   Clock,
   ArrowRight,
   CheckCircle2,
@@ -61,84 +60,90 @@ export default function Dashboard({ emails, logs, settings, onSync }: DashboardP
       {/* Upper Statistics Cards Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {/* Total Processed */}
-        <div className="bg-[#111111] border border-[#222222] rounded-2xl p-6 shadow-md hover:shadow-lg transition-all duration-300 flex items-start justify-between">
-          <div className="space-y-2">
-            <p className="text-xs font-mono tracking-wider text-[#888888] uppercase">Processed Emails</p>
-            <h3 className="text-4xl font-sans font-bold tracking-tight text-white">{totalProcessed}</h3>
-            <p className="text-xs text-[#888888]">Routed securely via Gemini AI</p>
+        <div className="glass-card rounded-[24px] p-6 flex items-start justify-between relative overflow-hidden">
+          <div className="space-y-2 z-10">
+            <p className="text-xs font-mono tracking-wider text-gray-400 uppercase">Processed Emails</p>
+            <h3 className="text-4xl font-bold tracking-tight text-white">{totalProcessed}</h3>
+            <p className="text-xs text-gray-500">Routed securely via AI gateway</p>
           </div>
-          <div className="p-3 bg-[#1a1a1a] rounded-xl text-white">
-            <Mail className="w-6 h-6 text-white" />
+          <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl text-indigo-400 z-10">
+            <Mail className="w-6 h-6" />
           </div>
+          {/* Subtle accent glow */}
+          <div className="absolute -bottom-10 -right-10 w-24 h-24 rounded-full bg-indigo-500/5 filter blur-xl"></div>
         </div>
 
         {/* High Priority Alerts */}
-        <div className="bg-[#111111] border border-[#222222] rounded-2xl p-6 shadow-md hover:shadow-lg transition-all duration-300 flex items-start justify-between">
-          <div className="space-y-2">
-            <p className="text-xs font-mono tracking-wider text-[#888888] uppercase">High Priority Alerts</p>
-            <h3 className="text-4xl font-sans font-bold tracking-tight text-white">{highImportanceCount}</h3>
-            <p className="text-xs text-[#888888]">
+        <div className="glass-card rounded-[24px] p-6 flex items-start justify-between relative overflow-hidden">
+          <div className="space-y-2 z-10">
+            <p className="text-xs font-mono tracking-wider text-gray-400 uppercase">High Priority Alerts</p>
+            <h3 className="text-4xl font-bold tracking-tight text-white">{highImportanceCount}</h3>
+            <p className="text-xs text-gray-500">
               {getPercentage(highImportanceCount)}% of overall emails processed
             </p>
           </div>
-          <div className="p-3 bg-red-950/40 text-red-400 rounded-xl border border-red-900/50 bento-glow-red">
+          <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-2xl z-10">
             <AlertTriangle className="w-6 h-6" />
           </div>
+          {/* Subtle accent glow */}
+          <div className="absolute -bottom-10 -right-10 w-24 h-24 rounded-full bg-red-500/5 filter blur-xl"></div>
         </div>
 
         {/* Inbox Sync Daemon */}
-        <div className="bg-[#111111] border border-[#222222] rounded-2xl p-6 shadow-md hover:shadow-lg transition-all duration-300 sm:col-span-2 lg:col-span-1 flex flex-col justify-between">
-          <div className="flex items-start justify-between mb-4">
+        <div className="glass-card rounded-[24px] p-6 flex flex-col justify-between relative overflow-hidden sm:col-span-2 lg:col-span-1">
+          <div className="flex items-start justify-between mb-4 z-10">
             <div className="space-y-1">
-              <p className="text-xs font-mono tracking-wider text-[#888888] uppercase">Sync Daemon</p>
+              <p className="text-xs font-mono tracking-wider text-gray-400 uppercase">Sync Daemon</p>
               <h4 className="text-sm font-semibold text-white">
                 {settings?.aiModel ? 'Active Model Sync' : 'Sandbox AI Engine'}
               </h4>
             </div>
-            <div className="flex items-center space-x-1.5 px-2 py-1 rounded-full bg-[#1a1a1a] border border-[#222222] bento-glow-green">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              <span className="text-[10px] font-mono font-semibold uppercase text-white">Live</span>
+            <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span className="text-[9px] font-mono font-medium uppercase text-emerald-400">Live</span>
             </div>
           </div>
-          <div className="space-y-2 text-xs">
-            <div className="flex justify-between border-b border-[#222222] pb-1.5 text-[#888888]">
+          <div className="space-y-2 text-xs z-10">
+            <div className="flex justify-between border-b border-white/5 pb-1.5 text-gray-400">
               <span>Last Sync Time:</span>
               <span className="font-mono font-medium text-white">
                 {lastSyncTime || 'Never synced'}
               </span>
             </div>
-            <div className="flex justify-between text-[#888888]">
+            <div className="flex justify-between text-gray-400">
               <span>Background Poll:</span>
               <span className="font-mono font-medium text-white">Every {settings?.gmailPollInterval || 5}m (Config)</span>
             </div>
           </div>
+          {/* Subtle accent glow */}
+          <div className="absolute -bottom-10 -right-10 w-24 h-24 rounded-full bg-emerald-500/5 filter blur-xl"></div>
         </div>
       </div>
 
       {/* Control Panel Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Sync Console */}
-        <div className="bg-[#111111] border border-[#222222] rounded-2xl p-6 shadow-md lg:col-span-7 flex flex-col justify-between space-y-6">
-          <div className="space-y-2">
-            <h3 className="text-lg font-semibold tracking-tight text-white">AI Routing Control Panel</h3>
-            <p className="text-sm text-[#888888] leading-relaxed">
+        <div className="glass-card rounded-[28px] p-6 lg:col-span-7 flex flex-col justify-between space-y-6 relative overflow-hidden">
+          <div className="space-y-2 z-10">
+            <h3 className="text-lg font-bold tracking-tight text-white">AI Routing Control Panel</h3>
+            <p className="text-sm text-gray-400 leading-relaxed">
               Scan, clean, and process incoming emails with high-performance LLM parsing. Gemini acts as an autonomous router — omitting noise, extracting summaries, and prioritizing tasks before they clutter your device.
             </p>
           </div>
 
-          <div className="p-4 rounded-xl bg-[#1a1a1a] border border-[#222222] space-y-3">
-            <div className="flex justify-between items-center text-xs text-[#888888]">
-              <span className="font-medium font-mono text-[#888888]">Sync Engine:</span>
-              <span className="bg-[#222222] px-2.5 py-1 rounded border border-[#333333] font-mono font-medium text-white text-[11px]">
+          <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3 z-10">
+            <div className="flex justify-between items-center text-xs text-gray-400">
+              <span className="font-medium font-mono text-gray-400">Sync Engine:</span>
+              <span className="bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 font-mono font-medium text-white text-[10px]">
                 {settings?.aiModel || 'gemini-3.5-flash'}
               </span>
             </div>
             {syncResult && (
-              <div className="flex items-start space-x-2 text-xs bg-emerald-950/20 text-emerald-300 p-2.5 rounded-lg border border-emerald-900/50">
+              <div className="flex items-start space-x-2.5 text-xs bg-emerald-950/20 text-emerald-300 p-3 rounded-xl border border-emerald-900/40">
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <div>
                   <p className="font-semibold text-emerald-200">Sync Successful!</p>
-                  <p className="opacity-90">
+                  <p className="opacity-90 mt-0.5">
                     {syncResult.added > 0 
                       ? `Discovered, analyzed and classified ${syncResult.added} new email(s).` 
                       : 'Sync completed. Inbox is fully cleared and optimized.'}
@@ -148,53 +153,60 @@ export default function Dashboard({ emails, logs, settings, onSync }: DashboardP
               </div>
             )}
             {syncFeedback && (
-              <p className="text-xs text-red-400 bg-red-950/20 p-2 rounded border border-red-900/50">{syncFeedback}</p>
+              <div className="flex items-start space-x-2 text-xs bg-red-950/20 text-red-300 p-3 rounded-xl border border-red-900/40">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <p className="leading-relaxed">{syncFeedback}</p>
+              </div>
             )}
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center gap-4">
+          <div className="flex items-center justify-between z-10 pt-2">
+            <div className="flex items-center space-x-2">
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="text-[10px] font-mono text-gray-500">DAEMON ACTIVE</span>
+            </div>
+
             <button
               onClick={handleSyncClick}
               disabled={isSyncing}
-              className="w-full sm:w-auto flex items-center justify-center space-x-2 bg-white hover:bg-neutral-200 active:scale-98 text-black px-5 py-3 rounded-xl font-semibold text-sm transition-all shadow-sm disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
-              id="btn-sync-inbox"
+              className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs px-5 py-3 rounded-xl transition-all shadow-lg active:scale-95 disabled:opacity-50 cursor-pointer"
             >
-              <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Synchronizing Inbox...' : 'Sync Inbox Now'}</span>
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              <span>{isSyncing ? 'Synchronizing...' : 'Run Daemon Sync'}</span>
             </button>
-            <span className="text-[11px] font-mono text-[#888888] text-center sm:text-left">
-              Emails processed through the <strong>Gemini parser</strong>
-            </span>
           </div>
         </div>
 
-        {/* Category distribution */}
-        <div className="bg-[#111111] border border-[#222222] rounded-2xl p-6 shadow-md lg:col-span-5 flex flex-col justify-between">
-          <div className="space-y-1 mb-4">
-            <h3 className="text-lg font-semibold tracking-tight text-white">AI Classification Distribution</h3>
-            <p className="text-xs text-[#888888]">How Gemini categorizes incoming messages</p>
+        {/* Categories Distribution */}
+        <div className="glass-card rounded-[28px] p-6 lg:col-span-5 space-y-6 relative overflow-hidden">
+          <div className="space-y-1.5 z-10">
+            <h3 className="text-lg font-bold tracking-tight text-white">Inbox Distribution</h3>
+            <p className="text-xs text-gray-400">Classified categories dynamically allocated by AI</p>
           </div>
 
-          <div className="space-y-3 flex-1 flex flex-col justify-center">
-            {totalProcessed === 0 ? (
-              <div className="text-center py-8 text-[#888888] space-y-2">
-                <Layers className="w-8 h-8 mx-auto text-[#222222]" />
-                <p className="text-xs">No email categories recorded yet.</p>
+          <div className="space-y-4 z-10 relative">
+            {Object.keys(categories).length === 0 ? (
+              <div className="py-12 text-center text-xs text-gray-500 font-mono">
+                No processed emails available. Run sync to build statistics.
               </div>
             ) : (
-              Object.entries(categories).map(([category, count]) => {
+              Object.entries(categories).map(([cat, count]) => {
                 const percentage = getPercentage(count);
                 return (
-                  <div key={category} className="space-y-1">
-                    <div className="flex justify-between items-center text-xs font-medium">
-                      <span className="text-white font-mono">{category}</span>
-                      <span className="text-[#888888] font-mono">
-                        {count} {count === 1 ? 'email' : 'emails'} ({percentage}%)
+                  <div key={cat} className="space-y-1.5">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-semibold text-gray-300">{cat}</span>
+                      <span className="font-mono text-gray-400 font-medium">
+                        {count} ({percentage}%)
                       </span>
                     </div>
-                    <div className="w-full h-2 bg-[#1a1a1a] rounded-full overflow-hidden border border-[#222222]">
+                    {/* Glass progress bar */}
+                    <div className="w-full bg-white/5 rounded-full h-2 overflow-hidden border border-white/5">
                       <div
-                        className="h-full bg-white rounded-full transition-all duration-500"
+                        className="bg-indigo-500 h-2 rounded-full transition-all duration-500"
                         style={{ width: `${percentage}%` }}
                       ></div>
                     </div>
@@ -206,40 +218,46 @@ export default function Dashboard({ emails, logs, settings, onSync }: DashboardP
         </div>
       </div>
 
-      {/* Activity Logs row */}
-      <div className="bg-[#111111] border border-[#222222] rounded-2xl p-6 shadow-md">
-        <div className="flex items-center justify-between mb-4">
-          <div className="space-y-1">
-            <h3 className="text-lg font-semibold tracking-tight text-white">Live Router Outcomes</h3>
-            <p className="text-xs text-[#888888]">Chronological audit log of Gemini's decisions</p>
+      {/* Recents Widget */}
+      <div className="glass-card rounded-[28px] p-6 relative overflow-hidden">
+        <div className="flex items-center justify-between mb-6 z-10 relative">
+          <div className="space-y-0.5">
+            <h3 className="text-base font-bold tracking-tight text-white">Recent Activity</h3>
+            <p className="text-xs text-gray-400">Latest raw sync transaction outputs from engine logs</p>
           </div>
-          <Clock className="w-5 h-5 text-[#888888]" />
         </div>
 
-        <div className="divide-y divide-[#222222] border-t border-[#222222]">
-          {logs.length === 0 ? (
-            <div className="text-center py-6 text-xs text-[#888888]">
-              No activity logged yet. Trigger a sync to view.
-            </div>
-          ) : (
-            logs.slice(0, 5).map((act) => (
-              <div key={act.id} className="py-3.5 flex items-center justify-between text-xs hover:bg-[#1a1a1a]/60 px-2 rounded-lg transition-all">
-                <div className="flex items-center space-x-3 truncate">
-                  <span className="text-[#888888] font-mono min-w-[70px]">{act.time}</span>
-                  <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-mono font-bold border ${
-                    act.level === 'ERROR'
-                      ? 'bg-red-950/40 border-red-900/50 text-red-400'
-                      : act.level === 'WARNING'
-                      ? 'bg-amber-950/40 border-amber-900/50 text-amber-400'
-                      : 'bg-[#222222] border-[#333333] text-stone-300'
-                  }`}>
-                    {act.type}
-                  </span>
-                  <span className="text-white font-sans truncate font-medium">{act.desc}</span>
-                </div>
-                <ArrowRight className="w-3.5 h-3.5 text-[#888888] shrink-0" />
+        <div className="space-y-3 z-10 relative">
+          {logs.slice(0, 4).map((log) => (
+            <div
+              key={log.id}
+              className="flex items-center justify-between text-xs p-3.5 rounded-2xl bg-white/5 border border-white/10"
+            >
+              <div className="flex items-center space-x-3">
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-[9px] font-mono font-medium ${
+                    log.level === 'ERROR'
+                      ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                      : log.level === 'WARNING'
+                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                      : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                  }`}
+                >
+                  {log.level}
+                </span>
+                <span className="font-mono text-gray-300">{log.type}</span>
+                <span className="text-gray-400 truncate max-w-[180px] sm:max-w-md">
+                  {log.desc}
+                </span>
               </div>
-            ))
+              <span className="text-[10px] font-mono text-gray-500">{log.time}</span>
+            </div>
+          ))}
+
+          {logs.length === 0 && (
+            <div className="py-8 text-center text-xs text-gray-500 font-mono">
+              System log is empty. Wait for background events.
+            </div>
           )}
         </div>
       </div>

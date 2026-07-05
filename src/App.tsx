@@ -239,19 +239,21 @@ export default function App() {
   // Render Login view if not authenticated
   if (!token) {
     return (
-      <div className="min-h-screen bg-black text-white font-sans flex flex-col justify-center items-center px-4 selection:bg-neutral-800">
-        <div className="max-w-md w-full bg-[#111111] border border-[#222222] rounded-3xl p-8 shadow-2xl space-y-8 animate-fade-in relative overflow-hidden">
-          {/* Subtle glow effect */}
-          <div className="absolute -top-24 -left-24 w-48 h-48 rounded-full bg-neutral-900 filter blur-3xl opacity-50"></div>
-          
+      <div className="min-h-screen bg-[#030303] text-white flex flex-col justify-center items-center px-4 relative overflow-hidden">
+        {/* Animated background blobs */}
+        <div className="bg-blob bg-indigo-600/20 top-1/4 left-1/4" style={{ animationDelay: '0s' }}></div>
+        <div className="bg-blob bg-purple-600/20 bottom-1/4 right-1/4" style={{ animationDelay: '-5s' }}></div>
+        <div className="bg-blob bg-cyan-600/15 top-1/2 left-1/2" style={{ animationDelay: '-10s' }}></div>
+
+        <div className="max-w-md w-full glass-panel rounded-[32px] p-8 shadow-2xl space-y-8 animate-fade-in relative overflow-hidden">
           <div className="text-center space-y-4 relative">
-            <div className="w-16 h-16 mx-auto bg-neutral-900 border border-[#333333] rounded-2xl flex items-center justify-center text-white shadow-lg mb-2">
-              <Mail className="w-8 h-8 text-white" />
+            <div className="w-16 h-16 mx-auto bg-white/5 border border-white/10 rounded-2xl flex items-center justify-center text-white shadow-lg mb-2">
+              <Mail className="w-8 h-8 text-indigo-400" />
             </div>
             <div className="space-y-1.5">
-              <h1 className="text-2xl font-bold tracking-tight text-white font-sans">Mail2WhatsApp AI</h1>
-              <p className="text-xs text-neutral-400 font-medium max-w-xs mx-auto leading-relaxed">
-                Connect your inbox to classify and summarize incoming emails instantly with OpenAI/OpenRouter AI and route critical alerts directly to WhatsApp.
+              <h1 className="text-2xl font-bold tracking-tight text-white">Mail2WhatsApp AI</h1>
+              <p className="text-xs text-gray-400 font-medium max-w-xs mx-auto leading-relaxed">
+                Connect your inbox to classify and summarize incoming emails instantly with AI and route critical alerts directly to WhatsApp.
               </p>
             </div>
           </div>
@@ -259,13 +261,13 @@ export default function App() {
           <div className="space-y-4">
             <a
               href="/api/auth/google"
-              className="w-full flex items-center justify-center space-x-3 bg-white hover:bg-neutral-200 text-black px-5 py-3.5 rounded-xl font-bold text-sm transition-all shadow-md active:scale-98 cursor-pointer"
+              className="w-full flex items-center justify-center space-x-3 bg-white hover:bg-gray-100 text-black px-5 py-3.5 rounded-xl font-semibold text-sm transition-all shadow-md active:scale-[0.98] cursor-pointer"
             >
               <LogIn className="w-4 h-4" />
               <span>Connect with Google Account</span>
             </a>
             
-            <p className="text-[10px] text-center text-[#555555] font-mono leading-relaxed">
+            <p className="text-[10px] text-center text-gray-500 font-mono leading-relaxed">
               Requires Gmail read-only scopes. Refresh tokens are secured and encrypted.
             </p>
           </div>
@@ -280,7 +282,7 @@ export default function App() {
           )}
         </div>
         
-        <footer className="mt-8 text-center text-[10px] font-mono text-[#444444]">
+        <footer className="mt-8 text-center text-[10px] font-mono text-gray-600 z-10">
           MAIL2WHATSAPP AI DAEMON SECURE GATEWAY • PORT: 3000
         </footer>
       </div>
@@ -289,7 +291,12 @@ export default function App() {
 
   // Render Dashboard Workspace
   return (
-    <div className="min-h-screen bg-black text-white font-sans flex flex-col selection:bg-neutral-800">
+    <div className="min-h-screen bg-[#030303] text-white flex flex-col relative overflow-hidden">
+      {/* Animated background blobs */}
+      <div className="bg-blob bg-indigo-600/10 top-10 left-10" style={{ animationDelay: '0s' }}></div>
+      <div className="bg-blob bg-purple-600/10 bottom-10 right-10" style={{ animationDelay: '-7s' }}></div>
+      <div className="bg-blob bg-cyan-600/10 top-1/2 left-1/3" style={{ animationDelay: '-14s' }}></div>
+
       {/* Navigation Header */}
       <Header
         activeTab={activeTab}
@@ -300,7 +307,7 @@ export default function App() {
       />
 
       {/* Main Workspace Frame */}
-      <main className="flex-1 max-w-7xl w-full mx-auto py-8 px-6 md:px-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto py-8 px-6 md:px-8 z-10">
         <div className="animate-fade-in transition-all duration-300">
           {activeTab === 'Dashboard' && (
             <Dashboard
@@ -337,7 +344,7 @@ export default function App() {
       </main>
 
       {/* Decorative footer */}
-      <footer className="py-6 text-center text-[10px] font-mono text-[#444444] border-t border-[#111111] bg-black">
+      <footer className="py-6 text-center text-[10px] font-mono text-gray-600 border-t border-white/5 bg-black/40 backdrop-blur-md z-10">
         MAIL2WHATSAPP AI DAEMON SECURE CLOUD GATEWAY • PORT: 3000
       </footer>
     </div>
