@@ -186,3 +186,17 @@ export async function getGmailSyncStatus(refreshToken: string): Promise<boolean>
     return false;
   }
 }
+
+export async function watchGmailAccount(refreshToken: string, topicName: string): Promise<any> {
+  const oauth2Client = getOAuth2Client();
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const response = await gmail.users.watch({
+    userId: 'me',
+    requestBody: {
+      labelIds: ['INBOX'],
+      topicName: topicName
+    }
+  });
+  return response.data;
+}

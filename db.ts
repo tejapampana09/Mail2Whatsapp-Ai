@@ -1,14 +1,10 @@
-import sqlite3 from 'sqlite3';
-import { open, Database } from 'sqlite';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { Pool, types } from 'pg';
 import crypto from 'crypto';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Handle timestamp conversion
+types.setTypeParser(1114, (stringValue) => new Date(stringValue + 'Z'));
 
-const DB_FILE = path.join(__dirname, 'database.db');
-let db: Database | null = null;
+let db: Pool | null = null;
 
 const ENCRYPTION_ALGORITHM = 'aes-256-cbc';
 
@@ -43,66 +39,68 @@ export function decryptText(encryptedText: string): string {
   }
 }
 
-export async function initDb(): Promise<Database> {
+export async function initDb(): Promise<Pool> {
   if (db) return db;
 
-  db = await open({
-    filename: DB_FILE,
-    driver: sqlite3.Database
+  db = new Pool({
+    user: process.env.PG_USER,
+    host: process.env.PG_HOST,
+    database: process.env.PG_DATABASE,
+    password: process.env.PG_PASSWORD,
+    port: process.env.PG_PORT ? parseInt(process.env.PG_PORT, 10) : 5432,
   });
 
-  // Enable foreign keys
-  await db.run('PRAGMA foreign_keys = ON');
-
   // Create Users Table
-  await db.exec(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       email TEXT UNIQUE NOT NULL,
       name TEXT,
       avatar TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
     )
   `);
 
   // Create OAuth Tokens Table
-  await db.exec(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS oauth_tokens (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       provider TEXT NOT NULL,
       access_token TEXT NOT NULL,
       refresh_token TEXT,
-      expiry_date INTEGER,
+      expiry_date BIGINT,
       scope TEXT,
       token_type TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      gmail_email TEXT,
+      UNIQUE(user_id, provider, gmail_email),
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
 
   // Create Settings Table
-  await db.exec(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS settings (
       user_id TEXT PRIMARY KEY,
       ai_model TEXT NOT NULL,
       ai_provider TEXT NOT NULL,
       language TEXT NOT NULL,
-      gmail_poll_interval INTEGER NOT NULL,
+      gmail_poll_interval INT NOT NULL,
       importance_threshold TEXT NOT NULL,
-      ignored_categories TEXT NOT NULL, -- JSON array of ignored categories
-      whatsapp_notifications_enabled INTEGER NOT NULL, -- 0 or 1
+      ignored_categories JSONB NOT NULL,
+      whatsapp_notifications_enabled BOOLEAN NOT NULL,
       whatsapp_number TEXT NOT NULL,
-      analyze_limit INTEGER NOT NULL,
-      updated_at TEXT NOT NULL,
+      analyze_limit INT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
 
   // Create Summary History Table (Emails)
-  await db.exec(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS emails (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -113,40 +111,20 @@ export async function initDb(): Promise<Database> {
       summary TEXT NOT NULL,
       category TEXT NOT NULL,
       importance TEXT NOT NULL,
-      date TEXT NOT NULL,
+      date TIMESTAMPTZ NOT NULL,
       whatsapp_status TEXT NOT NULL, -- 'Sent' | 'Failed' | 'Disabled' | 'Pending'
       whatsapp_message_id TEXT,
       delivery_error TEXT,
-      is_read INTEGER NOT NULL, -- 0 or 1
-      created_at TEXT NOT NULL,
-      attachments TEXT, -- JSON array of filenames
-      ai_metadata TEXT, -- JSON serialized metadata containing Action Required, deadlines, etc.
+      is_read BOOLEAN NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      attachments JSONB,
+      ai_metadata JSONB,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
 
-  // Database Schema Migrations (Add columns if missing for existing databases)
-  try {
-    await db.run('ALTER TABLE emails ADD COLUMN ai_metadata TEXT');
-    console.log('Database schema migrated: Added ai_metadata column.');
-  } catch (err: any) {
-    if (!err.message.includes('duplicate column name') && !err.message.includes('already exists')) {
-      console.warn('Database schema migration warning:', err.message);
-    }
-  }
-
-  // Migration: Add gmail_email to oauth_tokens for multi-account support
-  try {
-    await db.run('ALTER TABLE oauth_tokens ADD COLUMN gmail_email TEXT');
-    console.log('Database schema migrated: Added gmail_email column to oauth_tokens.');
-  } catch (err: any) {
-    if (!err.message.includes('duplicate column name') && !err.message.includes('already exists')) {
-      console.warn('Database schema migration warning (gmail_email):', err.message);
-    }
-  }
-
   // Create Execution Logs Table
-  await db.exec(`
+  await db.query(`
     CREATE TABLE IF NOT EXISTS logs (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -154,7 +132,7 @@ export async function initDb(): Promise<Database> {
       level TEXT NOT NULL, -- 'INFO' | 'WARNING' | 'ERROR'
       type TEXT NOT NULL,
       desc TEXT NOT NULL,
-      created_at TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
@@ -162,7 +140,7 @@ export async function initDb(): Promise<Database> {
   return db;
 }
 
-export async function getDb(): Promise<Database> {
+export async function getDb(): Promise<Pool> {
   if (!db) {
     return await initDb();
   }
@@ -172,31 +150,28 @@ export async function getDb(): Promise<Database> {
 // Users DB Methods
 export async function getUser(id: string) {
   const database = await getDb();
-  return await database.get('SELECT * FROM users WHERE id = ?', id);
+  const res = await database.query('SELECT * FROM users WHERE id = $1', [id]);
+  return res.rows[0];
 }
 
 export async function getUserByEmail(email: string) {
   const database = await getDb();
-  return await database.get('SELECT * FROM users WHERE email = ?', email);
+  const res = await database.query('SELECT * FROM users WHERE email = $1', [email]);
+  return res.rows[0];
 }
 
 export async function upsertUser(user: { id: string; email: string; name: string; avatar: string }) {
   const database = await getDb();
-  const now = new Date().toISOString();
-  await database.run(
+  const now = new Date();
+  await database.query(
     `INSERT INTO users (id, email, name, avatar, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT(id) DO UPDATE SET
-       email = excluded.email,
-       name = excluded.name,
-       avatar = excluded.avatar,
-       updated_at = excluded.updated_at`,
-    user.id,
-    user.email,
-    user.name,
-    user.avatar,
-    now,
-    now
+       email = EXCLUDED.email,
+       name = EXCLUDED.name,
+       avatar = EXCLUDED.avatar,
+       updated_at = EXCLUDED.updated_at`,
+    [user.id, user.email, user.name, user.avatar, now, now]
   );
   return await getUser(user.id);
 }
@@ -204,11 +179,11 @@ export async function upsertUser(user: { id: string; email: string; name: string
 // OAuth Tokens DB Methods
 export async function getOAuthToken(userId: string, provider = 'google') {
   const database = await getDb();
-  const token = await database.get(
-    'SELECT * FROM oauth_tokens WHERE user_id = ? AND provider = ?',
-    userId,
-    provider
+  const res = await database.query(
+    'SELECT * FROM oauth_tokens WHERE user_id = $1 AND provider = $2 AND gmail_email IS NULL',
+    [userId, provider]
   );
+  const token = res.rows[0];
   if (token && token.refresh_token) {
     token.refresh_token = decryptText(token.refresh_token);
   }
@@ -225,42 +200,21 @@ export async function saveOAuthToken(token: {
   token_type?: string;
 }) {
   const database = await getDb();
-  const now = new Date().toISOString();
+  const now = new Date();
   const tokenId = 'tok_' + Math.random().toString(36).substring(2, 11);
   const encryptedRefresh = token.refresh_token ? encryptText(token.refresh_token) : null;
 
-  const existingToken = await database.get(
-    'SELECT refresh_token FROM oauth_tokens WHERE user_id = ? AND provider = ?',
-    token.userId,
-    token.provider
-  );
-
-  if (existingToken) {
-    // Update existing token
-    const finalRefreshToken = encryptedRefresh || existingToken.refresh_token;
-    await database.run(
-      `UPDATE oauth_tokens SET
-         access_token = ?,
-         refresh_token = ?,
-         expiry_date = ?,
-         scope = ?,
-         token_type = ?,
-         updated_at = ?
-       WHERE user_id = ? AND provider = ?`,
-      token.access_token,
-      finalRefreshToken,
-      token.expiry_date || null,
-      token.scope || null,
-      token.token_type || null,
-      now,
-      token.userId,
-      token.provider
-    );
-  } else {
-    // Insert new token
-    await database.run(
-      `INSERT INTO oauth_tokens (id, user_id, provider, access_token, refresh_token, expiry_date, scope, token_type, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  await database.query(
+    `INSERT INTO oauth_tokens (id, user_id, provider, access_token, refresh_token, expiry_date, scope, token_type, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     ON CONFLICT(user_id, provider) WHERE gmail_email IS NULL DO UPDATE SET
+       access_token = EXCLUDED.access_token,
+       refresh_token = COALESCE(EXCLUDED.refresh_token, oauth_tokens.refresh_token),
+       expiry_date = EXCLUDED.expiry_date,
+       scope = EXCLUDED.scope,
+       token_type = EXCLUDED.token_type,
+       updated_at = EXCLUDED.updated_at`,
+    [
       tokenId,
       token.userId,
       token.provider,
@@ -270,25 +224,24 @@ export async function saveOAuthToken(token: {
       token.scope || null,
       token.token_type || null,
       now,
-      now
-    );
-  }
+      now,
+    ]
+  );
 }
 
 export async function deleteOAuthToken(userId: string, provider = 'google') {
   const database = await getDb();
-  await database.run('DELETE FROM oauth_tokens WHERE user_id = ? AND provider = ?', userId, provider);
+  await database.query('DELETE FROM oauth_tokens WHERE user_id = $1 AND provider = $2', [userId, provider]);
 }
 
 // Get all Google OAuth tokens for a user (multi-account)
 export async function getAllGoogleTokens(userId: string) {
   const database = await getDb();
-  const rows = await database.all(
-    'SELECT * FROM oauth_tokens WHERE user_id = ? AND provider = ? ORDER BY created_at ASC',
-    userId,
-    'google'
+  const res = await database.query(
+    'SELECT * FROM oauth_tokens WHERE user_id = $1 AND provider = $2 ORDER BY created_at ASC',
+    [userId, 'google']
   );
-  return rows.map(r => ({
+  return res.rows.map(r => ({
     id: r.id,
     gmailEmail: r.gmail_email || null,
     refreshToken: r.refresh_token ? decryptText(r.refresh_token) : null,
@@ -309,49 +262,48 @@ export async function saveGoogleAccountToken(token: {
   token_type?: string;
 }) {
   const database = await getDb();
-  const now = new Date().toISOString();
+  const now = new Date();
+  const tokenId = 'tok_' + Math.random().toString(36).substring(2, 11);
   const encryptedRefresh = token.refresh_token ? encryptText(token.refresh_token) : null;
 
-  // Check if this Gmail email is already connected for this user
-  const existing = await database.get(
-    'SELECT id FROM oauth_tokens WHERE user_id = ? AND provider = ? AND gmail_email = ?',
-    token.userId, token.provider, token.gmailEmail
+  await database.query(
+    `INSERT INTO oauth_tokens (id, user_id, provider, gmail_email, access_token, refresh_token, expiry_date, scope, token_type, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT(user_id, provider, gmail_email) DO UPDATE SET
+        access_token = EXCLUDED.access_token,
+        refresh_token = COALESCE(EXCLUDED.refresh_token, oauth_tokens.refresh_token),
+        expiry_date = EXCLUDED.expiry_date,
+        updated_at = EXCLUDED.updated_at`,
+    [
+      tokenId,
+      token.userId,
+      token.provider,
+      token.gmailEmail,
+      token.access_token,
+      encryptedRefresh,
+      token.expiry_date || null,
+      token.scope || null,
+      token.token_type || null,
+      now,
+      now
+    ]
   );
-
-  if (existing) {
-    await database.run(
-      `UPDATE oauth_tokens SET access_token=?, refresh_token=COALESCE(?,refresh_token), expiry_date=?, updated_at=? WHERE id=?`,
-      token.access_token, encryptedRefresh, token.expiry_date || null, now, existing.id
-    );
-  } else {
-    const tokenId = 'tok_' + Math.random().toString(36).substring(2, 11);
-    await database.run(
-      `INSERT INTO oauth_tokens (id, user_id, provider, gmail_email, access_token, refresh_token, expiry_date, scope, token_type, created_at, updated_at)
-       VALUES (?, ?, 'google', ?, ?, ?, ?, ?, ?, ?, ?)`,
-      tokenId, token.userId, token.gmailEmail, token.access_token, encryptedRefresh,
-      token.expiry_date || null, token.scope || null, token.token_type || null, now, now
-    );
-  }
 }
 
 // Delete a specific Gmail account token by its row id
 export async function deleteGoogleAccountToken(userId: string, tokenId: string) {
   const database = await getDb();
-  await database.run(
-    'DELETE FROM oauth_tokens WHERE id = ? AND user_id = ?',
-    tokenId, userId
+  await database.query(
+    'DELETE FROM oauth_tokens WHERE id = $1 AND user_id = $2',
+    [tokenId, userId]
   );
 }
 
 // Settings DB Methods
 export async function getSettings(userId: string) {
   const database = await getDb();
-  const settings = await database.get('SELECT * FROM settings WHERE user_id = ?', userId);
-  if (settings) {
-    settings.ignored_categories = JSON.parse(settings.ignored_categories);
-    settings.whatsapp_notifications_enabled = !!settings.whatsapp_notifications_enabled;
-  }
-  return settings;
+  const res = await database.query('SELECT * FROM settings WHERE user_id = $1', [userId]);
+  return res.rows[0];
 }
 
 export async function saveSettings(userId: string, settings: {
@@ -366,39 +318,23 @@ export async function saveSettings(userId: string, settings: {
   analyze_limit?: number;
 }) {
   const database = await getDb();
-  const now = new Date().toISOString();
-  const existing = await database.get('SELECT * FROM settings WHERE user_id = ?', userId);
+  const now = new Date();
 
-  if (existing) {
-    await database.run(
-      `UPDATE settings SET
-         ai_model = COALESCE(?, ai_model),
-         ai_provider = COALESCE(?, ai_provider),
-         language = COALESCE(?, language),
-         gmail_poll_interval = COALESCE(?, gmail_poll_interval),
-         importance_threshold = COALESCE(?, importance_threshold),
-         ignored_categories = COALESCE(?, ignored_categories),
-         whatsapp_notifications_enabled = COALESCE(?, whatsapp_notifications_enabled),
-         whatsapp_number = COALESCE(?, whatsapp_number),
-         analyze_limit = COALESCE(?, analyze_limit),
-         updated_at = ?
-       WHERE user_id = ?`,
-      settings.ai_model,
-      settings.ai_provider,
-      settings.language,
-      settings.gmail_poll_interval,
-      settings.importance_threshold,
-      settings.ignored_categories ? JSON.stringify(settings.ignored_categories) : null,
-      settings.whatsapp_notifications_enabled !== undefined ? (settings.whatsapp_notifications_enabled ? 1 : 0) : null,
-      settings.whatsapp_number,
-      settings.analyze_limit,
-      now,
-      userId
-    );
-  } else {
-    await database.run(
-      `INSERT INTO settings (user_id, ai_model, ai_provider, language, gmail_poll_interval, importance_threshold, ignored_categories, whatsapp_notifications_enabled, whatsapp_number, analyze_limit, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  await database.query(
+    `INSERT INTO settings (user_id, ai_model, ai_provider, language, gmail_poll_interval, importance_threshold, ignored_categories, whatsapp_notifications_enabled, whatsapp_number, analyze_limit, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT(user_id) DO UPDATE SET
+        ai_model = COALESCE($2, settings.ai_model),
+        ai_provider = COALESCE($3, settings.ai_provider),
+        language = COALESCE($4, settings.language),
+        gmail_poll_interval = COALESCE($5, settings.gmail_poll_interval),
+        importance_threshold = COALESCE($6, settings.importance_threshold),
+        ignored_categories = COALESCE($7, settings.ignored_categories),
+        whatsapp_notifications_enabled = COALESCE($8, settings.whatsapp_notifications_enabled),
+        whatsapp_number = COALESCE($9, settings.whatsapp_number),
+        analyze_limit = COALESCE($10, settings.analyze_limit),
+        updated_at = $11`,
+    [
       userId,
       settings.ai_model || (settings.ai_provider === 'openai' ? 'gpt-4o-mini' : 'openrouter/free'),
       settings.ai_provider || 'openrouter',
@@ -406,20 +342,20 @@ export async function saveSettings(userId: string, settings: {
       settings.gmail_poll_interval || 5,
       settings.importance_threshold || 'Medium',
       JSON.stringify(settings.ignored_categories || ['Spam', 'Promotion']),
-      settings.whatsapp_notifications_enabled ? 1 : 0,
+      settings.whatsapp_notifications_enabled === undefined ? true : settings.whatsapp_notifications_enabled,
       settings.whatsapp_number || '',
       settings.analyze_limit || 10,
       now
-    );
-  }
+    ]
+  );
   return await getSettings(userId);
 }
 
 // Emails (Summary History) DB Methods
 export async function getEmails(userId: string) {
   const database = await getDb();
-  const rows = await database.all('SELECT * FROM emails WHERE user_id = ? ORDER BY date DESC', userId);
-  return rows.map((r) => ({
+  const res = await database.query('SELECT * FROM emails WHERE user_id = $1 ORDER BY date DESC', [userId]);
+  return res.rows.map((r) => ({
     id: r.id,
     from: r.from_address,
     subject: r.subject,
@@ -431,30 +367,28 @@ export async function getEmails(userId: string) {
     whatsappStatus: r.whatsapp_status,
     whatsappMessageId: r.whatsapp_message_id,
     deliveryError: r.delivery_error,
-    isRead: !!r.is_read,
-    attachments: r.attachments ? JSON.parse(r.attachments) : [],
-    aiMetadata: r.ai_metadata ? JSON.parse(r.ai_metadata) : null,
+    isRead: r.is_read,
+    attachments: r.attachments || [],
+    aiMetadata: r.ai_metadata || null,
   }));
 }
 
 export async function emailExistsByGmailId(userId: string, gmailMessageId: string): Promise<boolean> {
   const database = await getDb();
-  const row = await database.get(
-    'SELECT id FROM emails WHERE user_id = ? AND gmail_message_id = ?',
-    userId,
-    gmailMessageId
+  const res = await database.query(
+    'SELECT id FROM emails WHERE user_id = $1 AND gmail_message_id = $2',
+    [userId, gmailMessageId]
   );
-  return !!row;
+  return res.rows.length > 0;
 }
 
 export async function getEmailsSince(userId: string, since: Date) {
   const database = await getDb();
-  const rows = await database.all(
-    'SELECT * FROM emails WHERE user_id = ? AND created_at >= ? ORDER BY date DESC',
-    userId,
-    since.toISOString()
+  const res = await database.query(
+    'SELECT * FROM emails WHERE user_id = $1 AND created_at >= $2 ORDER BY date DESC',
+    [userId, since]
   );
-  return rows.map((r) => ({
+  return res.rows.map((r) => ({
     id: r.id,
     from: r.from_address,
     subject: r.subject,
@@ -483,47 +417,49 @@ export async function addEmail(userId: string, email: {
   ai_metadata?: any;
 }) {
   const database = await getDb();
-  const now = new Date().toISOString();
+  const now = new Date();
   const emailId = email.id || 'email_' + Math.random().toString(36).substring(2, 11);
-  await database.run(
+  await database.query(
     `INSERT INTO emails (id, user_id, gmail_message_id, from_address, subject, content, summary, category, importance, date, whatsapp_status, whatsapp_message_id, delivery_error, is_read, created_at, attachments, ai_metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    emailId,
-    userId,
-    email.gmail_message_id || null,
-    email.from,
-    email.subject,
-    email.content,
-    email.summary,
-    email.category,
-    email.importance,
-    email.date,
-    email.whatsapp_status,
-    email.whatsapp_message_id || null,
-    email.delivery_error || null,
-    email.is_read ? 1 : 0,
-    now,
-    email.attachments ? JSON.stringify(email.attachments) : '[]',
-    email.ai_metadata ? JSON.stringify(email.ai_metadata) : null
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+    [
+      emailId,
+      userId,
+      email.gmail_message_id || null,
+      email.from,
+      email.subject,
+      email.content,
+      email.summary,
+      email.category,
+      email.importance,
+      email.date,
+      email.whatsapp_status,
+      email.whatsapp_message_id || null,
+      email.delivery_error || null,
+      email.is_read || false,
+      now,
+      JSON.stringify(email.attachments || []),
+      email.ai_metadata ? JSON.stringify(email.ai_metadata) : null
+    ]
   );
   return emailId;
 }
 
 export async function deleteEmail(userId: string, emailId: string) {
   const database = await getDb();
-  return await database.run('DELETE FROM emails WHERE user_id = ? AND id = ?', userId, emailId);
+  return await database.query('DELETE FROM emails WHERE user_id = $1 AND id = $2', [userId, emailId]);
 }
 
 export async function clearEmails(userId: string) {
   const database = await getDb();
-  return await database.run('DELETE FROM emails WHERE user_id = ?', userId);
+  return await database.query('DELETE FROM emails WHERE user_id = $1', [userId]);
 }
 
 // Logs (Execution Logs) DB Methods
 export async function getLogs(userId: string) {
   const database = await getDb();
-  const rows = await database.all('SELECT * FROM logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 100', userId);
-  return rows.map((r) => ({
+  const res = await database.query('SELECT * FROM logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100', [userId]);
+  return res.rows.map((r) => ({
     id: r.id,
     time: r.time,
     level: r.level,
@@ -534,24 +470,18 @@ export async function getLogs(userId: string) {
 
 export async function addLog(userId: string, level: 'INFO' | 'WARNING' | 'ERROR', type: string, desc: string) {
   const database = await getDb();
-  const now = new Date().toISOString();
+  const now = new Date();
   const logId = 'log_' + Math.random().toString(36).substring(2, 11);
   const timeStr = new Date().toLocaleTimeString();
 
-  await database.run(
+  await database.query(
     `INSERT INTO logs (id, user_id, time, level, type, desc, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    logId,
-    userId,
-    timeStr,
-    level,
-    type,
-    desc,
-    now
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [logId, userId, timeStr, level, type, desc, now]
   );
 }
 
 export async function clearLogs(userId: string) {
   const database = await getDb();
-  return await database.run('DELETE FROM logs WHERE user_id = ?', userId);
+  return await database.query('DELETE FROM logs WHERE user_id = $1', [userId]);
 }

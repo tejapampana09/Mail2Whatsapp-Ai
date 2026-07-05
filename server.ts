@@ -5,7 +5,10 @@ import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { PubSub } from '@google-cloud/pubsub';
 import { createServer as createViteServer } from 'vite';
+
+import logger from './logger.service';
 
 import {
   initDb,
@@ -26,7 +29,6 @@ import {
   deleteEmail,
   clearEmails,
   getLogs,
-  addLog,
   clearLogs
 } from './db.ts';
 
@@ -35,7 +37,8 @@ import {
   exchangeCodeForTokens,
   getUserInfo,
   fetchUnreadEmails,
-  markEmailAsRead
+  markEmailAsRead,
+  watchGmailAccount
 } from './gmail.ts';
 
 import {
@@ -64,9 +67,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'default-super-secure-local-jwt-sec
 
 // Initialize Database
 initDb().then(() => {
-  console.log('SQLite Database initialized successfully.');
+  logger.info({ type: 'DB_INIT', description: 'Database initialized successfully.' });
 }).catch((err) => {
-  console.error('Failed to initialize database:', err);
+  logger.error({ type: 'DB_INIT', description: `Failed to initialize database: ${err.message}` });
 });
 
 const app = express();
@@ -172,7 +175,7 @@ app.get('/api/auth/google', (_req, res) => {
     const authUrl = getAuthUrl();
     res.redirect(authUrl);
   } catch (err: any) {
-    console.error('Google OAuth URL generation failed:', err);
+    logger.error({ type: 'GOOGLE_AUTH', description: `Google OAuth URL generation failed: ${err.message}` });
     res.status(500).json({ error: 'Google OAuth is not configured on the server.' });
   }
 });
@@ -250,6 +253,46 @@ app.get('/api/auth/google/callback', async (req, res) => {
     // Write log
     await addLog(userId, 'INFO', 'GOOGLE_OAUTH', `User "${userEmail}" connected successfully via Google OAuth.`);
 
+    // Set up Gmail push notifications (watch)
+    if (tokens.refresh_token) {
+      const topicName = process.env.GOOGLE_PUB_SUB_TOPIC;
+      if (topicName) {
+        try {
+          await watchGmailAccount(tokens.refresh_token, topicName);
+          await addLog(userId, 'INFO', 'GMAIL_WATCH', `Successfully set up Gmail watch for ${userEmail}.`);
+
+          // Ensure Pub/Sub topic and subscription are configured
+          const pubsub = new PubSub();
+          const topic = pubsub.topic(topicName);
+          const [topicExists] = await topic.exists();
+          if (!topicExists) {
+            await topic.create();
+            console.log(`[Pub/Sub] Created Pub/Sub topic: ${topicName}`);
+          }
+
+          const subscriptionName = process.env.GOOGLE_PUB_SUB_SUBSCRIPTION || 'gmail-push-subscription';
+          const subscription = topic.subscription(subscriptionName);
+          const [subExists] = await subscription.exists();
+          if (!subExists) {
+            const webhookUrl = process.env.WEBHOOK_URL;
+            if (!webhookUrl) {
+              throw new Error('WEBHOOK_URL environment variable not set for Pub/Sub push.');
+            }
+            await subscription.create({
+              pushEndpoint: webhookUrl,
+              ackDeadlineSeconds: 60,
+            });
+            console.log(`[Pub/Sub] Created push subscription: ${subscriptionName} -> ${webhookUrl}`);
+          }
+        } catch (watchErr: any) {
+          console.error('Failed to set up Gmail watch:', watchErr);
+          await addLog(userId, 'ERROR', 'GMAIL_WATCH', `Failed to set up Gmail watch for ${userEmail}: ${watchErr.message}`);
+        }
+      } else {
+        await addLog(userId, 'WARNING', 'GMAIL_WATCH', 'Gmail watch setup skipped: GOOGLE_PUB_SUB_TOPIC not configured.');
+      }
+    }
+
     // Check if this is an "add additional account" flow
     const state = req.query.state as string || '';
     if (state.startsWith('add_account:')) {
@@ -267,6 +310,47 @@ app.get('/api/auth/google/callback', async (req, res) => {
           token_type: tokens.token_type || undefined
         });
         await addLog(existingUserId, 'INFO', 'GOOGLE_OAUTH', `Additional Gmail account "${userEmail}" connected.`);
+
+        // Set up Gmail push notifications for the additional account
+        if (tokens.refresh_token) {
+          const topicName = process.env.GOOGLE_PUB_SUB_TOPIC;
+          if (topicName) {
+            try {
+              await watchGmailAccount(tokens.refresh_token, topicName);
+              await addLog(existingUserId, 'INFO', 'GMAIL_WATCH', `Successfully set up Gmail watch for ${userEmail}.`);
+
+              // Ensure Pub/Sub topic and subscription are configured
+              const pubsub = new PubSub();
+              const topic = pubsub.topic(topicName);
+              const [topicExists] = await topic.exists();
+              if (!topicExists) {
+                await topic.create();
+                console.log(`[Pub/Sub] Created Pub/Sub topic: ${topicName}`);
+              }
+
+              const subscriptionName = process.env.GOOGLE_PUB_SUB_SUBSCRIPTION || 'gmail-push-subscription';
+              const subscription = topic.subscription(subscriptionName);
+              const [subExists] = await subscription.exists();
+              if (!subExists) {
+                const webhookUrl = process.env.WEBHOOK_URL;
+                if (!webhookUrl) {
+                  throw new Error('WEBHOOK_URL environment variable not set for Pub/Sub push.');
+                }
+                await subscription.create({
+                  pushEndpoint: webhookUrl,
+                  ackDeadlineSeconds: 60,
+                });
+                console.log(`[Pub/Sub] Created push subscription: ${subscriptionName} -> ${webhookUrl}`);
+              }
+            } catch (watchErr: any) {
+              console.error('Failed to set up Gmail watch for additional account:', watchErr);
+              await addLog(existingUserId, 'ERROR', 'GMAIL_WATCH', `Failed to set up watch for ${userEmail}: ${watchErr.message}`);
+            }
+          } else {
+            await addLog(existingUserId, 'WARNING', 'GMAIL_WATCH', `Watch setup skipped for ${userEmail}: GOOGLE_PUB_SUB_TOPIC not configured.`);
+          }
+        }
+
         // Return to dashboard without changing JWT
         return res.redirect(`/?token=${existingJwt || ''}&account_added=true`);
       }
