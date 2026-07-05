@@ -1,89 +1,159 @@
-# Mail2WhatsApp AI — Production V1
+# 📧 Mail2WhatsApp AI ➡️ 💬
 
-An intelligent email summarization, category classification, and forwarding gateway. Mail2WhatsApp AI automatically monitors your Gmail inbox, analyzes incoming emails using OpenAI/OpenRouter models, extracts critical summaries, and routes urgent alerts directly to your WhatsApp.
+<p align="center">
+  <img src="app_icon.png" width="160" height="160" alt="Mail2WhatsApp AI Logo" style="border-radius: 30px; box-shadow: 0 10px 25px rgba(0,0,0,0.35);" />
+</p>
+
+<p align="center">
+  <strong>Intelligent Real-Time Email Prioritization, Summarization, and WhatsApp Forwarding Gateway</strong>
+</p>
+
+<p align="center">
+  <a href="https://whatsapp2mail.duckdns.org"><strong>🚀 Live Production Link</strong></a>
+</p>
+
+---
+
+## 📖 Project Overview
+**Mail2WhatsApp AI** is a self-hosted, lightweight notification gateway designed to solve email overload. It continuously monitors your Gmail inbox, analyzes incoming emails using advanced LLM intelligence, filters out spam, categorizes them, drafts brief summaries of important emails, and forwards them directly to your WhatsApp.
+
+Built with a modern stack including **React, Node.js (TypeScript), SQLite, and Google Gemini**, it runs 24/7 on an AWS EC2 cloud instance under Caddy reverse-proxy and PM2.
+
+---
+
+## ✨ Key Features
+- 🔄 **Real-Time Gmail Poll Daemon:** Run as a continuous background service looking for new unread mail headers and bodies.
+- 🧠 **AI Priority Triage:** Integrates native `@google/genai` (specifically `gemini-2.5-flash`) to analyze and prioritize (High/Medium/Low) and classify (Work, Personal, System) emails.
+- 📝 **Intelligent Summarization:** Creates concise summaries of long emails so you can read them at a glance on the road.
+- 💬 **Flexible WhatsApp Dispatcher:** Integrates with Meta's Graph API. Supports both **Free-Form Text Messages** (24h session window) and **Template Messages** (bypasses 24h window).
+- 🔐 **Secure Design:** Self-hosted database (SQLite), session tokens protected with high-entropy JWT secrets, and no third-party data tracking.
+- 🛡️ **Auto HTTPS/SSL:** Built-in Caddy configuration for automatic SSL certificate provisioning.
+
+---
+
+## 🛠️ Technology Stack
+- **Frontend:** React, Lucide Icons, Vite, Tailwind CSS (modern premium dark-mode dashboard).
+- **Backend:** Node.js, Express, TypeScript.
+- **Database:** SQLite (local cache for performance & absolute privacy).
+- **AI Core:** Google Gemini SDK (`@google/genai`).
+- **Hosting & Infrastructure:** AWS EC2 (t3.micro), Caddy Server (reverse proxy & SSL), PM2 (node process manager).
+- **DNS wildcards:** DuckDNS wildcard mapping.
 
 ---
 
 ## 🔑 Environment Variables Configuration
-
-Create a `.env` file in the root directory and configure the following variables (refer to `.env.example`):
+Create a `.env` file in the root directory:
 
 ```env
-# LLM Provider Configuration ('openai' or 'openrouter')
-LLM_PROVIDER=openrouter
-LLM_API_KEY=your_openai_or_openrouter_api_key
-LLM_MODEL=openrouter/free
+# LLM Provider Configuration
+LLM_PROVIDER=google
+LLM_API_KEY=your_gemini_api_key
+LLM_MODEL=gemini-2.5-flash
 
-# Google OAuth Credentials (for Gmail integration)
+# Google OAuth 2.0 Credentials (Gmail API)
 GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your_google_client_secret
-GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/google/callback
+GOOGLE_REDIRECT_URI=https://whatsapp2mail.duckdns.org/api/auth/google/callback
 
-# JWT Encryption Secret
-JWT_SECRET=your_jwt_signing_secret_hex_string
+# JWT Security
+JWT_SECRET=your_secure_64_character_hex_signing_secret
 
 # WhatsApp Cloud API Credentials
-WHATSAPP_ACCESS_TOKEN=your_whatsapp_permanent_access_token
-WHATSAPP_PHONE_NUMBER_ID=your_whatsapp_phone_number_id
+WHATSAPP_ACCESS_TOKEN=your_meta_system_user_permanent_access_token
+WHATSAPP_PHONE_NUMBER_ID=your_meta_phone_number_id
+
+# (Optional) WhatsApp Template settings to bypass 24h window
+WHATSAPP_TEMPLATE_NAME=email_alert
+WHATSAPP_TEMPLATE_LANG=en
 ```
 
 ---
 
-## 🛠️ Service Setup Guidelines
+## 🚀 Step-by-Step Setup Guide
 
-### 1. Google OAuth & Gmail API Setup
+### 1. Google OAuth Client Configuration
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new Project or select an existing one.
-3. Enable the **Gmail API** under *APIs & Services > Library*.
-4. Configure the OAuth Consent Screen:
-   - Select **External** user type.
-   - Add the scopes: `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile`, and `https://www.googleapis.com/auth/gmail.readonly`.
-   - Add your developer email as a test user since the app is in Testing mode.
-5. Create credentials under *APIs & Services > Credentials*:
-   - Click *Create Credentials > OAuth client ID*.
-   - Application type: **Web application**.
-   - Authorized redirect URIs: `http://localhost:3000/api/auth/google/callback` (for local development).
-6. Copy the **Client ID** and **Client Secret** into your `.env` file.
-
-### 2. OpenAI / OpenRouter Setup
-- **OpenAI:** Obtain an API key from the [OpenAI Platform](https://platform.openai.com/). Set `LLM_PROVIDER=openai` and specify a model like `gpt-4o-mini`.
-- **OpenRouter:** Obtain an API key from [OpenRouter](https://openrouter.ai/). Set `LLM_PROVIDER=openrouter` and use `openrouter/free` for free inference or a paid model slug if you have access.
-
-### 3. WhatsApp Cloud API Setup
-1. Log in to the [Meta Developers Portal](https://developers.facebook.com/).
-2. Create an App with the **Other** type, then select **Business** portfolio.
-3. Add the **WhatsApp** product to your App.
-4. Locate the **Temporary Access Token** and **Phone Number ID** under the WhatsApp *Getting Started* tab.
-5. Set up a permanent access token by creating a System User in your Meta Business Manager and granting it permission to your WhatsApp account.
-6. Populate `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` in your `.env` file.
+2. Enable the **Gmail API** (*APIs & Services > Library*).
+3. Set up the OAuth Consent Screen:
+   - User Type: **External**.
+   - Add scopes: `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile`, and `https://www.googleapis.com/auth/gmail.readonly`.
+   - Add your Gmail as a **Test User** (mandatory while app is in testing).
+4. Create **OAuth Client ID Credentials** (Web Application):
+   - **Authorized Redirect URIs:** Add `https://whatsapp2mail.duckdns.org/api/auth/google/callback` (production) and `http://localhost:3000/api/auth/google/callback` (local dev).
+5. Copy the Client ID and Secret to `.env`.
 
 ---
 
-## 🚀 Run Locally
+### 2. DuckDNS Wildcard Mapping Setup
+Google OAuth Console blocks raw IP addresses. To use a free custom domain:
+1. Log in to [DuckDNS](https://www.duckdns.org/).
+2. Add a new domain named `whatsapp2mail` (yielding `whatsapp2mail.duckdns.org`).
+3. Set the IP address of `whatsapp2mail` to your EC2 instance Public IP (`54.162.62.35`).
 
-### Prerequisites
-- Node.js (v18 or higher recommended)
-- npm
+---
 
-### 1. Install Dependencies
-```bash
-npm install
-```
+### 3. Meta WhatsApp Cloud API Setup (Live Mode)
+To register your own number and get rid of sandbox test-number limitations:
+1. Go to the [Meta Developers Console](https://developers.facebook.com/).
+2. Add the **WhatsApp** product to your Business App.
+3. Switch App status from **In Development** to **Live** (requires linking a payment method, but the first 1,000 conversations every month are 100% free!).
+4. Add a permanent sender phone number in the *WhatsApp > API Setup* tab.
+5. Create a **System User** in Meta Business Manager and generate a **Permanent Access Token** with `whatsapp_business_messaging` scope.
+6. **(To bypass the 24-hour session window restriction):**
+   - Go to *Message Templates* in the WhatsApp manager and create a template named `email_alert`:
+     ```text
+     📧 New Urgent Email Alert
+     
+     From: {{1}}
+     Subject: {{2}}
+     Category: {{3}}
+     Urgency: {{4}}
+     
+     Gemini/LLM Summary:
+     {{5}}
+     ```
+   - Once approved, add `WHATSAPP_TEMPLATE_NAME=email_alert` to your `.env` file on the server.
 
-### 2. Run in Development Mode
-Starts the Express backend on port `3000` with the Vite frontend assets served dynamically:
-```bash
-npm run dev
-```
-Open your browser and navigate to `http://localhost:3000`.
+---
 
-### 3. Production Build & Run
-To compile the frontend and start the server in production mode:
-```bash
-# Build Vite assets
-npm run build
+### 4. Deploying to AWS EC2 (Production Setup)
+1. **Launch Instance:**
+   - Launch a `t3.micro` EC2 Instance using **Ubuntu 24.04 LTS**.
+   - Associate a security group opening ports `22` (SSH), `80` (HTTP), and `443` (HTTPS).
+2. **Install Server Packages:**
+   ```bash
+   sudo apt-get update -y
+   sudo apt-get install -y curl git caddy
+   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+   sudo apt-get install -y nodejs
+   sudo npm install -g pm2
+   ```
+3. **Upload Files & Configure:**
+   - SCP project code and your customized `.env` to `/home/ubuntu/mail2whatsapp-ai/`.
+   - Run `npm install` and `npm run build` in the directory.
+4. **Launch Application:**
+   ```bash
+   NODE_ENV=production pm2 start "npx tsx server.ts" --name "mail2whatsapp" --cwd "/home/ubuntu/mail2whatsapp-ai"
+   pm2 save
+   pm2 startup
+   ```
+5. **Caddy Reverse Proxy Setup:**
+   Configure `/etc/caddy/Caddyfile`:
+   ```caddy
+   whatsapp2mail.duckdns.org {
+       reverse_proxy localhost:3000
+   }
+   ```
+   Restart Caddy: `sudo systemctl restart caddy`. Caddy will automatically secure your domain with Let's Encrypt HTTPS certificates!
 
-# Start the server (Set NODE_ENV to production)
-$env:NODE_ENV="production"
-npm start
-```
+---
+
+### 💻 Local Development
+1. Install dependencies: `npm install`
+2. Run in dev mode: `npm run dev`
+3. Open browser: `http://localhost:3000`
+
+---
+
+## 📜 Privacy & Security
+This application is self-hosted. All fetched emails are processed in-memory and details are stored locally inside `database.db`. No data is ever transmitted to any third-party analytics company.
