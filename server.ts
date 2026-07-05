@@ -606,6 +606,37 @@ async function startSyncDaemon() {
 startSyncDaemon();
 
 // ----------------------------------------------------
+// Privacy Policy Endpoint (Meta App Review Compliance)
+// ----------------------------------------------------
+app.get('/privacy', (_req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>Privacy Policy - Mail2WhatsApp</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; line-height: 1.6; color: #333; }
+          h1 { color: #111; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+          h2 { color: #333; margin-top: 30px; }
+        </style>
+      </head>
+      <body>
+        <h1>Privacy Policy</h1>
+        <p><strong>Last updated:</strong> July 5, 2026</p>
+        <p>Mail2WhatsApp ("we", "our", or "us") operates this notification gateway tool. We are committed to protecting your privacy and security.</p>
+        <h2>1. Information Processing</h2>
+        <p>Our application processes incoming email headers and summaries from your connected Gmail account for the sole purpose of analyzing urgency levels and routing priority notifications to your configured WhatsApp number.</p>
+        <h2>2. Data Storage & Privacy</h2>
+        <p>All database logs, configuration files, and authentication tokens are stored locally on your own private server and are never shared, uploaded, or exposed to third-party services, except for the required Google and Meta API endpoints.</p>
+        <h2>3. Third-Party Services</h2>
+        <p>This service utilizes the Google Gmail API for mail synchronization and the Meta Graph API for message dispatch. Your use of these integrations is governed by their respective privacy policies.</p>
+        <h2>4. Contact</h2>
+        <p>For any privacy concerns, please contact your system administrator.</p>
+      </body>
+    </html>
+  `);
+});
+
+// ----------------------------------------------------
 // Frontend Asset Serving
 // ----------------------------------------------------
 
