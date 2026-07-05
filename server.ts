@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import path from 'path';
@@ -49,6 +50,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
+  throw new Error('FATAL: JWT_SECRET environment variable is not defined in production!');
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'default-super-secure-local-jwt-secret-key-123456';
 
 // Initialize Database
@@ -60,8 +65,29 @@ initDb().then(() => {
 
 const app = express();
 
-// Security Middlewares
-app.use(cors());
+// Helmet HTTP Security Headers (prevent clickjacking, mime sniffing, XSS, etc.)
+app.use(helmet({
+  contentSecurityPolicy: false // Disable default CSP to prevent blocking loading client-side Vite scripts
+}));
+
+// Secure Whitelisted CORS Configuration
+const allowedOrigins = [
+  'https://whatsapp2mail.duckdns.org',
+  'http://54.162.62.35.nip.io',
+  'http://localhost:3000',
+  'http://localhost:5173'
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
+
 app.use(express.json());
 
 // In-Memory Rate Limiter (Security)
@@ -604,6 +630,17 @@ async function startSyncDaemon() {
 }
 
 startSyncDaemon();
+
+// ----------------------------------------------------
+// DevOps / Health Check Endpoint
+// ----------------------------------------------------
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'OK',
+    uptime: process.uptime(),
+    timestamp: Date.now()
+  });
+});
 
 // ----------------------------------------------------
 // Privacy Policy Endpoint (Meta App Review Compliance)
