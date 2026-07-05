@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://whatsapp2mail.duckdns.org"><strong>🚀 Live Production Link</strong></a>
+  <a href="https://whatsapp2mail.duckdns.org"><strong>🚀 Live Production Link</strong></a> | <img src="https://img.shields.io/badge/version-2.0.0-blue.svg" alt="v2.0.0" inline />
 </p>
 
 ---
