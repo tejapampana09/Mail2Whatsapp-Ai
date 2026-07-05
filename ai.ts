@@ -144,6 +144,18 @@ Body Content: ${content}`;
         }
       }
     }
+    
+    const openrouterKey = process.env.OPENROUTER_API_KEY;
+    if (openrouterKey && !openrouterKey.includes('replace_me')) {
+      console.warn('[AI] Google Gen AI failed. Attempting automatic fallback to OpenRouter...');
+      try {
+        const fallbackResult = await callOpenRouterFallback(openrouterKey, userMessage, systemPrompt, subject);
+        return fallbackResult;
+      } catch (orErr: any) {
+        console.error('[AI] OpenRouter fallback also failed:', orErr.message);
+      }
+    }
+    
     throw lastError || new Error('Google Gen AI calls failed after retries.');
   }
 
@@ -287,4 +299,76 @@ export function getFallbackAnalysis(from: string, subject: string, content: stri
       calendarEvent: null
     }
   };
+}
+
+async function callOpenRouterFallback(
+  apiKey: string,
+  userMessage: string,
+  systemPrompt: string,
+  subject: string
+): Promise<LLMResult> {
+  const endpoint = 'https://openrouter.ai/api/v1/chat/completions';
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKey}`,
+    'HTTP-Referer': 'http://localhost:3000',
+    'X-Title': 'Mail2WhatsApp AI Daemon'
+  };
+
+  const fallbackModels = [
+    'google/gemma-2-9b-it:free',
+    'meta-llama/llama-3-8b-instruct:free',
+    'qwen/qwen-2-7b-instruct:free'
+  ];
+
+  let lastError: any = null;
+  for (const model of fallbackModels) {
+    try {
+      console.log(`[AI] Attempting OpenRouter fallback with model: ${model}`);
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage }
+          ],
+          temperature: 0.1,
+          max_tokens: 500,
+          response_format: { type: 'json_object' }
+        })
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`HTTP ${res.status}: ${errText}`);
+      }
+
+      const data = await res.json();
+      const text = data.choices?.[0]?.message?.content?.trim();
+      if (!text) {
+        throw new Error('Received empty response from OpenRouter.');
+      }
+
+      let cleanedText = text.trim();
+      const firstBrace = cleanedText.indexOf('{');
+      const lastBrace = cleanedText.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+        cleanedText = cleanedText.substring(firstBrace, lastBrace + 1);
+      }
+
+      const result = JSON.parse(cleanedText);
+      return {
+        category: result.category || 'Work',
+        importance: result.importance || 'Medium',
+        summary: result.summary || subject,
+        aiMetadata: result.aiMetadata || null
+      };
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[AI] OpenRouter fallback model ${model} failed:`, err.message);
+    }
+  }
+  throw lastError || new Error('All OpenRouter fallback models failed.');
 }
