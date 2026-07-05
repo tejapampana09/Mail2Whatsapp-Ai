@@ -14,8 +14,8 @@ export default function Header({ activeTab, setActiveTab, hasApiKey, userProfile
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
         {/* Branding Logo */}
         <div className="flex items-center space-x-3">
-          <div className="p-2.5 bg-neutral-900 border border-[#333333] rounded-xl flex items-center justify-center text-white shadow-md">
-            <Mail className="w-5 h-5 text-white animate-pulse" />
+          <div className="w-10 h-10 border border-[#333333] rounded-xl overflow-hidden shadow-md flex items-center justify-center bg-black">
+            <img src="/app_icon.png" alt="Mail2WhatsApp Logo" className="w-full h-full object-cover" />
           </div>
           <div>
             <div className="flex items-center space-x-2">
