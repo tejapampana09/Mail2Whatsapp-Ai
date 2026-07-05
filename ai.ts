@@ -93,43 +93,58 @@ Body Content: ${content}`;
   }
 
   if (provider === 'google' || provider === 'gemini') {
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      const response = await ai.models.generateContent({
-        model: initialModel,
-        contents: userMessage,
-        config: {
-          systemInstruction: systemPrompt,
-          responseMimeType: 'application/json',
-          temperature: 0.1
+    const ai = new GoogleGenAI({ apiKey });
+    let lastError: any = null;
+    
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        if (attempt > 1) {
+          console.warn(`[AI] Google Gen AI attempt 1 failed with transient error. Retrying in 1.5 seconds...`);
+          await new Promise(resolve => setTimeout(resolve, 1500));
         }
-      });
 
-      const text = response.text;
-      if (!text) {
-        throw new Error('Received empty response from Gemini API.');
+        const response = await ai.models.generateContent({
+          model: initialModel,
+          contents: userMessage,
+          config: {
+            systemInstruction: systemPrompt,
+            responseMimeType: 'application/json',
+            temperature: 0.1
+          }
+        });
+
+        const text = response.text;
+        if (!text) {
+          throw new Error('Received empty response from Gemini API.');
+        }
+
+        console.log('Raw LLM Response:', text);
+
+        let cleanedText = text.trim();
+        const firstBrace = cleanedText.indexOf('{');
+        const lastBrace = cleanedText.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+          cleanedText = cleanedText.substring(firstBrace, lastBrace + 1);
+        }
+
+        const result = JSON.parse(cleanedText);
+        return {
+          category: result.category || 'Work',
+          importance: result.importance || 'Medium',
+          summary: result.summary || subject,
+          aiMetadata: result.aiMetadata || null
+        };
+      } catch (err: any) {
+        lastError = err;
+        console.error(`[AI] Google Gen AI attempt ${attempt} failed:`, err.message);
+        
+        // If it's a permanent configuration error (like 404 Model Not Found or Auth issue), do not retry
+        if (err.status === 404 || err.status === 401 || err.status === 403) {
+          break;
+        }
       }
-
-      console.log('Raw LLM Response:', text);
-
-      let cleanedText = text.trim();
-      const firstBrace = cleanedText.indexOf('{');
-      const lastBrace = cleanedText.lastIndexOf('}');
-      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        cleanedText = cleanedText.substring(firstBrace, lastBrace + 1);
-      }
-
-      const result = JSON.parse(cleanedText);
-      return {
-        category: result.category || 'Work',
-        importance: result.importance || 'Medium',
-        summary: result.summary || subject,
-        aiMetadata: result.aiMetadata || null
-      };
-    } catch (err: any) {
-      console.error(`[AI] Google Gen AI SDK request failed:`, err.message);
-      throw err;
     }
+    throw lastError || new Error('Google Gen AI calls failed after retries.');
   }
 
   // Define the queue of models to try
