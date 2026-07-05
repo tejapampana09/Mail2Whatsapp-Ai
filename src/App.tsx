@@ -241,9 +241,9 @@ export default function App() {
     return (
       <div className="min-h-screen bg-[#030303] text-white flex flex-col justify-center items-center px-4 relative overflow-hidden">
         {/* Animated background blobs */}
-        <div className="bg-blob bg-indigo-600/20 top-1/4 left-1/4" style={{ animationDelay: '0s' }}></div>
-        <div className="bg-blob bg-purple-600/20 bottom-1/4 right-1/4" style={{ animationDelay: '-5s' }}></div>
-        <div className="bg-blob bg-cyan-600/15 top-1/2 left-1/2" style={{ animationDelay: '-10s' }}></div>
+        <div className="bg-blob bg-indigo-600 top-1/4 left-1/4" style={{ animationDelay: '0s' }}></div>
+        <div className="bg-blob bg-purple-600 bottom-1/4 right-1/4" style={{ animationDelay: '-5s' }}></div>
+        <div className="bg-blob bg-cyan-600 top-1/2 left-1/2" style={{ animationDelay: '-10s' }}></div>
 
         <div className="max-w-md w-full glass-panel rounded-[32px] p-8 shadow-2xl space-y-8 animate-fade-in relative overflow-hidden">
           <div className="text-center space-y-4 relative">
@@ -293,9 +293,9 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#030303] text-white flex flex-col relative overflow-hidden">
       {/* Animated background blobs */}
-      <div className="bg-blob bg-indigo-600/10 top-10 left-10" style={{ animationDelay: '0s' }}></div>
-      <div className="bg-blob bg-purple-600/10 bottom-10 right-10" style={{ animationDelay: '-7s' }}></div>
-      <div className="bg-blob bg-cyan-600/10 top-1/2 left-1/3" style={{ animationDelay: '-14s' }}></div>
+      <div className="bg-blob bg-indigo-600 top-10 left-10" style={{ animationDelay: '0s' }}></div>
+      <div className="bg-blob bg-purple-600 bottom-10 right-10" style={{ animationDelay: '-7s' }}></div>
+      <div className="bg-blob bg-cyan-600 top-1/2 left-1/3" style={{ animationDelay: '-14s' }}></div>
 
       {/* Navigation Header */}
       <Header

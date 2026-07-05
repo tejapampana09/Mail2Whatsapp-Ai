@@ -54,14 +54,14 @@ body {
 /* Liquid Blob Background */
 .bg-blob {
   position: absolute;
-  width: 500px;
-  height: 500px;
+  width: 600px;
+  height: 600px;
   border-radius: 50%;
   mix-blend-mode: screen;
-  filter: blur(80px);
-  opacity: 0.15;
+  filter: blur(120px);
+  opacity: 0.35;
   pointer-events: none;
-  animation: float-blob 20s infinite alternate ease-in-out;
+  animation: float-blob 25s infinite alternate ease-in-out;
 }
 
 @keyframes float-blob {
