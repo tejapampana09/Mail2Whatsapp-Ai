@@ -1,0 +1,21 @@
+version: '3.9'
+
+services:
+  mail2whatsapp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mail2whatsapp
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./database.db:/app/database.db
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -375,6 +375,24 @@ export async function emailExistsByGmailId(userId: string, gmailMessageId: strin
   return !!row;
 }
 
+export async function getEmailsSince(userId: string, since: Date) {
+  const database = await getDb();
+  const rows = await database.all(
+    'SELECT * FROM emails WHERE user_id = ? AND created_at >= ? ORDER BY date DESC',
+    userId,
+    since.toISOString()
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    from: r.from_address,
+    subject: r.subject,
+    category: r.category,
+    importance: r.importance,
+    date: r.date,
+    whatsappStatus: r.whatsapp_status,
+  }));
+}
+
 export async function addEmail(userId: string, email: {
   id?: string;
   gmail_message_id?: string;

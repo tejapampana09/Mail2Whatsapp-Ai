@@ -43,9 +43,62 @@ export function getWhatsAppAuthFailureMessage(statusCode: number, error?: { code
   ].join(' ');
 }
 
+function buildAlertMessage(
+  emailDetails: { from: string; subject: string; category: string; importance: string; summary: string },
+  aiMetadata?: any
+): string {
+  const importanceEmoji = emailDetails.importance === 'High' ? '🔴' : emailDetails.importance === 'Medium' ? '🟡' : '🔵';
+  const importanceHeader = emailDetails.importance === 'High' ? 'URGENT EMAIL ALERT' : emailDetails.importance === 'Medium' ? 'EMAIL ALERT' : 'EMAIL NOTIFICATION';
+  const divider = '━━━━━━━━━━━━━━━━━━━━━';
+
+  // Truncate summary to 300 chars
+  const summary = emailDetails.summary.length > 300
+    ? emailDetails.summary.substring(0, 297) + '...'
+    : emailDetails.summary;
+
+  // Truncate subject
+  const subject = emailDetails.subject.length > 80
+    ? emailDetails.subject.substring(0, 77) + '...'
+    : emailDetails.subject;
+
+  // Truncate from
+  const from = emailDetails.from.length > 60
+    ? emailDetails.from.substring(0, 57) + '...'
+    : emailDetails.from;
+
+  let message = `${importanceEmoji} *${importanceHeader}*\n${divider}\n`;
+  message += `📨 *From:* ${from}\n`;
+  message += `📌 *Subject:* ${subject}\n`;
+  message += `🏷️ *Category:* ${emailDetails.category}  |  ⚡ *Priority:* ${emailDetails.importance}\n`;
+  message += `\n💡 *AI Summary:*\n${summary}\n`;
+
+  // Append AI metadata if available
+  if (aiMetadata) {
+    if (aiMetadata.actionRequired && aiMetadata.actionDetails) {
+      message += `\n⚠️ *Action Required:* ${aiMetadata.actionDetails}`;
+    }
+    if (aiMetadata.deadline) {
+      message += `\n⏰ *Deadline:* ${aiMetadata.deadline}`;
+    }
+    if (aiMetadata.classifications && aiMetadata.classifications.length > 0) {
+      message += `\n🔖 *Tags:* ${aiMetadata.classifications.join(' • ')}`;
+    }
+    if (aiMetadata.spamScore && aiMetadata.spamScore > 60) {
+      message += `\n🚨 *Warning:* High spam/scam probability (${aiMetadata.spamScore}%)`;
+    }
+    if (aiMetadata.calendarEvent) {
+      message += `\n📅 *Event:* ${aiMetadata.calendarEvent.title} — ${aiMetadata.calendarEvent.start}`;
+    }
+  }
+
+  message += `\n\n${divider}\n🤖 _Powered by Mail2WhatsApp AI_`;
+  return message;
+}
+
 export async function sendWhatsAppAlert(
   toNumber: string,
-  emailDetails: { from: string; subject: string; category: string; importance: string; summary: string }
+  emailDetails: { from: string; subject: string; category: string; importance: string; summary: string },
+  aiMetadata?: any
 ): Promise<WhatsAppSendResult> {
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -73,16 +126,7 @@ export async function sendWhatsAppAlert(
     };
   }
 
-  // Format alert text template beautifully
-  const messageText = `📧 *New Urgent Email Alert*
-
-*From:* ${emailDetails.from}
-*Subject:* ${emailDetails.subject}
-*Category:* ${emailDetails.category}
-*Urgency:* ${emailDetails.importance}
-
-*Gemini/LLM Summary:*
-${emailDetails.summary}`;
+  const messageText = buildAlertMessage(emailDetails, aiMetadata);
 
   const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
 
@@ -176,6 +220,75 @@ ${emailDetails.summary}`;
         error: retryErr.message || 'Unknown WhatsApp API dispatch failure.'
       };
     }
+  }
+}
+
+export async function sendWhatsAppDigest(
+  toNumber: string,
+  stats: {
+    total: number;
+    high: number;
+    medium: number;
+    low: number;
+    categories: Record<string, number>;
+    topSubjects: string[];
+  }
+): Promise<WhatsAppSendResult> {
+  const token = process.env.WHATSAPP_ACCESS_TOKEN;
+  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  if (!token || !phoneId || token.includes('replace_me') || phoneId.includes('replace_me')) {
+    return { status: 'Failed', error: 'WhatsApp API credentials not configured.' };
+  }
+
+  const cleanNumber = normalizeWhatsAppNumber(toNumber);
+  if (!cleanNumber) return { status: 'Failed', error: 'Invalid phone number.' };
+
+  const divider = '━━━━━━━━━━━━━━━━━━━━━';
+  const now = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
+
+  let msg = `📊 *Daily Email Digest*\n${divider}\n`;
+  msg += `📅 *${now}*\n\n`;
+  msg += `📬 *Total Emails:* ${stats.total}\n`;
+  msg += `🔴 High Priority: ${stats.high}\n`;
+  msg += `🟡 Medium Priority: ${stats.medium}\n`;
+  msg += `🔵 Low Priority: ${stats.low}\n`;
+
+  if (Object.keys(stats.categories).length > 0) {
+    msg += `\n📂 *Categories:*\n`;
+    for (const [cat, count] of Object.entries(stats.categories).slice(0, 5)) {
+      msg += `  • ${cat}: ${count}\n`;
+    }
+  }
+
+  if (stats.topSubjects.length > 0) {
+    msg += `\n📌 *Top Subjects:*\n`;
+    stats.topSubjects.slice(0, 3).forEach((s, i) => {
+      const truncated = s.length > 50 ? s.substring(0, 47) + '...' : s;
+      msg += `  ${i + 1}. ${truncated}\n`;
+    });
+  }
+
+  msg += `\n${divider}\n🤖 _Mail2WhatsApp AI Daily Digest_`;
+
+  const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: cleanNumber,
+        type: 'text',
+        text: { preview_url: false, body: msg }
+      })
+    });
+    const resJson: any = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(resJson?.error?.message || `HTTP ${response.status}`);
+    return { status: 'Sent', messageId: resJson?.messages?.[0]?.id };
+  } catch (err: any) {
+    return { status: 'Failed', error: err.message };
   }
 }
 

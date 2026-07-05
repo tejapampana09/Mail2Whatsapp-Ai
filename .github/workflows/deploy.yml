@@ -1,0 +1,42 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    name: SSH Deploy to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 120s
+          script: |
+            set -e
+            echo "🚀 Starting deployment..."
+            cd /home/ubuntu/mail2whatsapp-ai
+
+            echo "📥 Pulling latest changes from GitHub..."
+            git pull origin master
+
+            echo "📦 Installing dependencies..."
+            npm install
+
+            echo "🏗️ Building frontend assets..."
+            npm run build
+
+            echo "🔄 Restarting PM2 process..."
+            pm2 restart mail2whatsapp
+
+            echo "✅ Deployment complete!"
+            pm2 status

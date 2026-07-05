@@ -17,6 +17,7 @@ import {
   getSettings,
   saveSettings,
   getEmails,
+  getEmailsSince,
   addEmail,
   emailExistsByGmailId,
   deleteEmail,
@@ -41,6 +42,7 @@ import {
 
 import {
   sendWhatsAppAlert,
+  sendWhatsAppDigest,
   checkWhatsAppConfig
 } from './whatsapp.ts';
 
@@ -547,7 +549,7 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
     if (settings.whatsapp_notifications_enabled && emailImportanceVal >= thresholdVal && settings.whatsapp_number) {
       try {
         await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `Urgent alert triggered. Routing alert summary to WhatsApp number ${settings.whatsapp_number}...`);
-        const pushResult = await sendWhatsAppAlert(settings.whatsapp_number, { from: rawEmail.from, subject: rawEmail.subject, category, importance, summary });
+        const pushResult = await sendWhatsAppAlert(settings.whatsapp_number, { from: rawEmail.from, subject: rawEmail.subject, category, importance, summary }, aiMetadata);
         whatsappStatus = pushResult.status;
         whatsappMsgId = pushResult.messageId;
         deliveryErr = pushResult.error;
@@ -633,6 +635,109 @@ async function startSyncDaemon() {
 }
 
 startSyncDaemon();
+
+// ----------------------------------------------------
+// Daily Digest Scheduler (Every morning at 8:00 AM IST)
+// ----------------------------------------------------
+async function startDailyDigestScheduler() {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // IST = UTC+5:30
+
+  function msUntilNextDigest(): number {
+    const nowUTC = Date.now();
+    const nowIST = new Date(nowUTC + IST_OFFSET_MS);
+    const nextIST = new Date(nowIST);
+    nextIST.setHours(8, 0, 0, 0);
+    if (nextIST <= nowIST) nextIST.setDate(nextIST.getDate() + 1);
+    return nextIST.getTime() - nowIST.getTime();
+  }
+
+  const scheduleDigest = async () => {
+    try {
+      const database = await getDb();
+      const tokens = await database.all('SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = ?', 'google');
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+      for (const t of tokens) {
+        const userId = t.user_id;
+        const settings = await getSettings(userId);
+        if (!settings?.whatsapp_notifications_enabled || !settings?.whatsapp_number) continue;
+
+        const emails = await getEmailsSince(userId, since24h);
+        if (emails.length === 0) continue;
+
+        const stats = {
+          total: emails.length,
+          high: emails.filter(e => e.importance === 'High').length,
+          medium: emails.filter(e => e.importance === 'Medium').length,
+          low: emails.filter(e => e.importance === 'Low').length,
+          categories: emails.reduce((acc: Record<string, number>, e) => {
+            acc[e.category] = (acc[e.category] || 0) + 1;
+            return acc;
+          }, {}),
+          topSubjects: emails.filter(e => e.importance === 'High').slice(0, 3).map(e => e.subject)
+        };
+
+        console.log(`[Digest] Sending daily digest to user ${userId} with ${stats.total} emails...`);
+        const result = await sendWhatsAppDigest(settings.whatsapp_number, stats);
+        if (result.status === 'Sent') {
+          await addLog(userId, 'INFO', 'DAILY_DIGEST', `Daily digest sent: ${stats.total} emails, ${stats.high} urgent.`);
+        } else {
+          await addLog(userId, 'WARNING', 'DAILY_DIGEST', `Daily digest failed: ${result.error}`);
+        }
+      }
+    } catch (err: any) {
+      console.error('[Digest] Daily digest failed:', err.message);
+    }
+
+    // Schedule next digest
+    setTimeout(scheduleDigest, msUntilNextDigest());
+  };
+
+  const delayMs = msUntilNextDigest();
+  console.log(`[Digest] Daily digest scheduled. Next trigger in ${Math.round(delayMs / 60000)} minutes.`);
+  setTimeout(scheduleDigest, delayMs);
+}
+
+startDailyDigestScheduler();
+
+// ----------------------------------------------------
+// Gmail Pub/Sub Push Webhook (Instant Email Detection)
+// ----------------------------------------------------
+app.post('/webhook/gmail', async (req, res) => {
+  try {
+    const body = req.body;
+    if (!body?.message?.data) {
+      return res.status(200).send('OK'); // Acknowledge invalid messages
+    }
+
+    // Decode base64 Pub/Sub message
+    const rawData = Buffer.from(body.message.data, 'base64').toString('utf8');
+    const notification = JSON.parse(rawData);
+    const historyId = notification.historyId;
+    const emailAddress = notification.emailAddress;
+
+    if (!emailAddress) {
+      return res.status(200).send('OK');
+    }
+
+    console.log(`[Pub/Sub] Gmail push received for ${emailAddress}, historyId: ${historyId}`);
+
+    // Find user by email and trigger sync
+    const database = await getDb();
+    const user = await database.get('SELECT id FROM users WHERE email = ?', emailAddress);
+    if (user) {
+      console.log(`[Pub/Sub] Triggering instant sync for user ${user.id}...`);
+      runSyncForUser(user.id).catch((err) => {
+        console.error(`[Pub/Sub] Instant sync failed for user ${user.id}:`, err.message);
+      });
+    }
+
+    res.status(200).send('OK');
+  } catch (err: any) {
+    console.error('[Pub/Sub] Webhook error:', err.message);
+    res.status(200).send('OK'); // Always ACK to prevent Pub/Sub retry storm
+  }
+});
 
 // ----------------------------------------------------
 // DevOps / Health Check Endpoint
