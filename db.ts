@@ -72,6 +72,15 @@ export async function initDb(): Promise<Database.Database> {
     )
   `);
 
+  // Partial unique index required for ON CONFLICT(user_id, provider) WHERE gmail_email IS NULL
+  // SQLite treats NULLs as distinct in UNIQUE constraints, so a regular UNIQUE(user_id, provider, gmail_email)
+  // won't enforce uniqueness when gmail_email IS NULL — this index fixes that.
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_tokens_primary
+    ON oauth_tokens(user_id, provider)
+    WHERE gmail_email IS NULL
+  `);
+
   // Create Settings Table
   db.exec(`
     CREATE TABLE IF NOT EXISTS settings (
