@@ -3,7 +3,8 @@ import IORedis from 'ioredis';
 import logger from './logger.service';
 import { analyzeEmail, getFallbackAnalysis } from './ai';
 import { sendWhatsAppAlert } from './whatsapp';
-import { getSettings, markEmailAsRead, addEmail, getDb, emailExistsByGmailId, getAllGoogleTokens } from './db';
+import { getSettings, addEmail, addLog, getDb, emailExistsByGmailId, getAllGoogleTokens } from './db';
+import { markEmailAsRead } from './gmail';
 
 const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: null

@@ -29,6 +29,7 @@ import {
   deleteEmail,
   clearEmails,
   getLogs,
+  addLog,
   clearLogs
 } from './db.ts';
 
