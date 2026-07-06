@@ -769,10 +769,9 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
 
         // Update DB record with final analysis results
         const db = await getDb();
-        await db.run(
-          `UPDATE emails SET category=?, importance=?, summary=?, whatsapp_status=?, whatsapp_message_id=?, delivery_error=?, ai_metadata=? WHERE id=?`,
-          category, importance, summary, whatsappStatus, whatsappMsgId || null, deliveryErr || null, aiMetadata ? JSON.stringify(aiMetadata) : null, emailRecordId
-        );
+        db.prepare(
+          `UPDATE emails SET category=?, importance=?, summary=?, whatsapp_status=?, whatsapp_message_id=?, delivery_error=?, ai_metadata=? WHERE id=?`
+        ).run(category, importance, summary, whatsappStatus, whatsappMsgId || null, deliveryErr || null, aiMetadata ? JSON.stringify(aiMetadata) : null, emailRecordId);
 
         // Mark as read in Gmail
         try { await markEmailAsRead(accountToken.refreshToken, rawEmail.id); } catch (_) {}
@@ -801,20 +800,19 @@ async function startSyncDaemon() {
     try {
       const database = await initDb();
       // Query all users that have Google credentials
-      const tokens = await database.all("SELECT user_id FROM oauth_tokens WHERE provider = 'google'");
+      const tokens = database.prepare("SELECT user_id FROM oauth_tokens WHERE provider = 'google'").all();
       
-      for (const t of tokens) {
-        const userId = t.user_id;
+      for (const t of tokens as any[]) {
+        const userId = (t as any).user_id;
         const settings = await getSettings(userId);
         if (!settings) continue;
 
         const pollIntervalMin = settings.gmail_poll_interval || 5;
 
         // Query the latest GMAIL_POLL log to see when the last poll occurred
-        const lastPollLog = await database.get(
-          "SELECT created_at FROM logs WHERE user_id = ? AND type = 'GMAIL_POLL' ORDER BY created_at DESC LIMIT 1",
-          userId
-        );
+        const lastPollLog = database.prepare(
+          "SELECT created_at FROM logs WHERE user_id = ? AND type = 'GMAIL_POLL' ORDER BY created_at DESC LIMIT 1"
+        ).get(userId);
 
         let runSync = false;
         if (!lastPollLog) {
@@ -860,7 +858,7 @@ async function startDailyDigestScheduler() {
   const scheduleDigest = async () => {
     try {
       const database = await getDb();
-      const tokens = await database.all('SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = ?', 'google');
+      const tokens = database.prepare('SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = ?').all('google');
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
       for (const t of tokens) {
@@ -930,7 +928,7 @@ app.post('/webhook/gmail', async (req, res) => {
 
     // Find user by email and trigger sync
     const database = await getDb();
-    const user = await database.get('SELECT id FROM users WHERE email = ?', emailAddress);
+    const user = database.prepare('SELECT id FROM users WHERE email = ?').get(emailAddress);
     if (user) {
       console.log(`[Pub/Sub] Triggering instant sync for user ${user.id}...`);
       runSyncForUser(user.id).catch((err) => {
