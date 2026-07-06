@@ -3,8 +3,6 @@ import {
   Mail,
   AlertTriangle,
   RefreshCw,
-  Clock,
-  ArrowRight,
   CheckCircle2,
 } from 'lucide-react';
 import { ProcessedEmail, ActivityLog, SystemSettings } from '../types';
@@ -131,7 +129,7 @@ export default function Dashboard({ emails, logs, settings, onSync }: DashboardP
             </p>
           </div>
 
-          <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-3 z-10">
+          <div className="p-4 rounded-2xl glass-card border border-white/5 space-y-3 z-10">
             <div className="flex justify-between items-center text-xs text-gray-400">
               <span className="font-medium font-mono text-gray-400">Sync Engine:</span>
               <span className="bg-white/10 px-2.5 py-1 rounded-lg border border-white/10 font-mono font-medium text-white text-[10px]">
@@ -172,7 +170,7 @@ export default function Dashboard({ emails, logs, settings, onSync }: DashboardP
             <button
               onClick={handleSyncClick}
               disabled={isSyncing}
-              className="flex items-center space-x-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs px-5 py-3 rounded-xl transition-all shadow-lg active:scale-95 disabled:opacity-50 cursor-pointer"
+              className="flex items-center space-x-2 glass-panel rounded-xl border border-white/10 px-4 py-2 text-white font-medium transition-all hover:border-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20 disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
               <span>{isSyncing ? 'Synchronizing...' : 'Run Daemon Sync'}</span>
@@ -231,7 +229,7 @@ export default function Dashboard({ emails, logs, settings, onSync }: DashboardP
           {logs.slice(0, 4).map((log) => (
             <div
               key={log.id}
-              className="flex items-center justify-between text-xs p-3.5 rounded-2xl bg-white/5 border border-white/10"
+              className="flex items-center justify-between text-xs p-3.5 rounded-2xl glass-card border border-white/5"
             >
               <div className="flex items-center space-x-3">
                 <span

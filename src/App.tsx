@@ -261,9 +261,9 @@ export default function App() {
           <div className="space-y-4">
             <a
               href="/api/auth/google"
-              className="w-full flex items-center justify-center space-x-3 bg-white hover:bg-gray-100 text-black px-5 py-3.5 rounded-xl font-semibold text-sm transition-all shadow-md active:scale-[0.98] cursor-pointer"
+              className="w-full flex items-center justify-center space-x-3 bg-white/10 hover:bg-white/15 text-white border border-white/20 px-5 py-3.5 rounded-xl font-semibold text-sm transition-all shadow-lg active:scale-[0.98] cursor-pointer backdrop-blur-md"
             >
-              <LogIn className="w-4 h-4" />
+              <LogIn className="w-4 h-4 text-indigo-400" />
               <span>Connect with Google Account</span>
             </a>
             

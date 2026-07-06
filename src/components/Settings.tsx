@@ -189,7 +189,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Google OAuth Connection */}
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col justify-between space-y-4">
+            <div className="glass-card rounded-2xl p-4 flex flex-col justify-between space-y-4 border border-white/5 shadow-md">
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
                   <span className="text-xs font-mono text-gray-400 uppercase block">Inbox Sync Link</span>
@@ -217,7 +217,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                   <button
                     type="button"
                     onClick={handleDisconnectGoogle}
-                    className="flex items-center space-x-1.5 text-xs font-semibold text-red-400 hover:text-white bg-white/5 hover:bg-red-500/10 border border-white/10 px-3 py-2 rounded-lg transition-all cursor-pointer"
+                    className="glass-panel rounded-lg px-3 py-2 text-xs font-semibold text-red-400 hover:text-white hover:border-red-500/20 transition-all cursor-pointer"
                   >
                     <Unlink className="w-3.5 h-3.5" />
                     <span>Disconnect Google</span>
@@ -225,7 +225,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                 ) : (
                   <a
                     href="/api/auth/google"
-                    className="inline-flex items-center space-x-1.5 text-xs font-semibold text-black bg-white hover:bg-gray-100 px-3 py-2 rounded-lg transition-all"
+                    className="glass-panel rounded-lg px-3 py-2 text-xs font-semibold text-white hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer"
                   >
                     <Link className="w-3.5 h-3.5" />
                     <span>Connect Google</span>
@@ -235,7 +235,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
             </div>
 
             {/* WhatsApp Integration Status */}
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col justify-between space-y-4">
+            <div className="glass-card rounded-2xl p-4 flex flex-col justify-between space-y-4 border border-white/5 shadow-md">
               <div className="flex items-start justify-between">
                 <div className="space-y-1">
                   <span className="text-xs font-mono text-gray-400 uppercase block">Alert Push Channel</span>
@@ -272,7 +272,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                 <button
                   type="button"
                   onClick={handleAddAccountClick}
-                  className="flex items-center space-x-1 text-xs font-semibold text-indigo-400 hover:text-indigo-300 transition-all cursor-pointer"
+                  className="glass-panel rounded-lg px-3 py-1.5 flex items-center space-x-2 text-xs font-semibold text-indigo-400 hover:text-indigo-300 hover:border-indigo-400/20 transition-all cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Connect Another</span>
@@ -283,7 +283,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                 {gmailAccounts.map((acc) => (
                   <div
                     key={acc.id}
-                    className="flex justify-between items-center text-xs p-3 rounded-xl bg-white/5 border border-white/10 animate-fade-in"
+                    className="flex justify-between items-center text-xs p-3.5 rounded-xl glass-card border border-white/5 animate-fade-in"
                   >
                     <div className="flex items-center space-x-2.5">
                       <span className="font-semibold text-white">{acc.email}</span>
@@ -298,7 +298,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                       <button
                         type="button"
                         onClick={() => handleDeleteAccount(acc.id, acc.email)}
-                        className="p-1.5 text-gray-500 hover:text-red-400 transition-all cursor-pointer"
+                        className="glass-panel rounded-lg p-1 flex items-center justify-center hover:text-red-400 hover:border-red-500/20 transition-all cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -345,7 +345,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                     setAiModel('openrouter/free');
                   }
                 }}
-                className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-3 text-white outline-none cursor-pointer font-sans transition-all"
+                className="glass-input w-full font-sans transition-all"
               >
                 <option value="openrouter" className="bg-[#121216]">OpenRouter (Default API)</option>
                 <option value="openai" className="bg-[#121216]">OpenAI (Official API)</option>
@@ -366,7 +366,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                 value={aiModel}
                 onChange={(e) => setAiModel(e.target.value)}
                 placeholder={aiProvider === 'openai' ? 'gpt-4o-mini' : aiProvider === 'google' ? 'gemini-1.5-flash' : 'openrouter/free'}
-                className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-3 text-xs text-white transition-all outline-none"
+                className="glass-input w-full font-sans transition-all"
                 required
               />
               <p className="text-[10px] text-gray-500">
@@ -395,7 +395,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
               <select
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-3 text-white outline-none cursor-pointer font-sans transition-all"
+                className="glass-input w-full font-sans transition-all"
               >
                 <option value="English" className="bg-[#121216]">English</option>
                 <option value="Spanish" className="bg-[#121216]">Spanish (Español)</option>
@@ -417,7 +417,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
               <select
                 value={gmailPollInterval}
                 onChange={(e) => setGmailPollInterval(Number(e.target.value))}
-                className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-3 text-white outline-none cursor-pointer font-sans transition-all"
+                className="glass-input w-full font-sans transition-all"
               >
                 <option value={1} className="bg-[#121216]">Every 1 Minute (High Precision)</option>
                 <option value={5} className="bg-[#121216]">Every 5 Minutes (Standard)</option>
@@ -438,7 +438,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
               <select
                 value={importanceThreshold}
                 onChange={(e) => setImportanceThreshold(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-3 text-white outline-none cursor-pointer font-sans transition-all"
+                className="glass-input w-full font-sans transition-all"
               >
                 <option value="High" className="bg-[#121216]">High Urgency Only</option>
                 <option value="Medium" className="bg-[#121216]">Medium & High Urgency</option>
@@ -457,7 +457,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
               <select
                 value={analyzeLimit}
                 onChange={(e) => setAnalyzeLimit(Number(e.target.value))}
-                className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-3 text-white outline-none cursor-pointer font-sans transition-all"
+                className="glass-input w-full font-sans transition-all"
               >
                 <option value={5} className="bg-[#121216]">Max 5 Emails</option>
                 <option value={10} className="bg-[#121216]">Max 10 Emails (Recommended)</option>
@@ -494,10 +494,10 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                     key={cat}
                     type="button"
                     onClick={() => toggleCategory(cat)}
-                    className={`flex items-center justify-between p-3 rounded-xl border text-xs font-semibold text-left transition-all cursor-pointer ${
+                    className={`glass-panel rounded-xl p-3 flex items-center justify-between text-xs font-semibold transition-all cursor-pointer ${
                       isIgnored
-                        ? 'bg-red-500/10 text-red-400 border-red-500/25'
-                        : 'bg-white/5 border-white/10 text-gray-300 hover:border-white/20'
+                        ? 'border-red-500/25 text-red-400 hover:border-red-500/30'
+                        : 'border-white/10 text-gray-300 hover:border-white/20 hover:text-white'
                     }`}
                   >
                     <span>{cat}</span>
@@ -521,7 +521,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
 
           <div className="space-y-4 text-xs">
             {/* Toggle notifications */}
-            <div className="flex items-center justify-between bg-white/5 p-4 rounded-2xl border border-white/10">
+            <div className="glass-panel rounded-2xl p-4 flex items-center justify-between">
               <div className="space-y-1 pr-4">
                 <span className="font-semibold text-white block">Forwarding Dispatch Status</span>
                 <span className="text-[11px] text-gray-400">
@@ -531,13 +531,13 @@ export default function Settings({ settings, onSave }: SettingsProps) {
               <button
                 type="button"
                 onClick={() => setWhatsappNotificationsEnabled(!whatsappNotificationsEnabled)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  whatsappNotificationsEnabled ? 'bg-white' : 'bg-white/10'
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 transition-colors duration-200 ease-in-out focus:outline-none ${
+                  whatsappNotificationsEnabled ? 'border-white/20' : 'border-white/10'
                 }`}
               >
                 <span
                   className={`pointer-events-none inline-block h-5 w-5 transform rounded-full shadow ring-0 transition duration-200 ease-in-out ${
-                    whatsappNotificationsEnabled ? 'translate-x-5 bg-black' : 'translate-x-0 bg-gray-400'
+                    whatsappNotificationsEnabled ? 'translate-x-5 bg-white' : 'translate-x-0 bg-gray-400'
                   }`}
                 />
               </button>
@@ -554,7 +554,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                   placeholder="+1 (555) 019-2834"
                   value={whatsappNumber}
                   onChange={(e) => setWhatsappNumber(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl py-3 px-4 text-xs text-white transition-all outline-none"
+                  className="glass-input w-full font-sans transition-all"
                   required={whatsappNotificationsEnabled}
                 />
                 <p className="text-[10px] text-gray-500">
@@ -566,7 +566,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
         </div>
 
         {/* Form Action Submit */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white/5 border border-white/10 rounded-2xl p-5">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 glass-panel rounded-2xl p-5">
           {saveSuccess ? (
             <span className="text-xs text-emerald-400 font-semibold font-mono">
               ✓ Parameters committed & synchronization daemon updated.
@@ -580,7 +580,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
           <button
             type="submit"
             disabled={isSaving}
-            className="w-full sm:w-auto flex items-center justify-center space-x-2 bg-white hover:bg-gray-100 active:scale-98 text-black font-bold text-xs py-3 px-6 rounded-xl transition-all cursor-pointer shadow disabled:opacity-50"
+            className="w-full sm:w-auto flex items-center justify-center space-x-2 glass-panel rounded-2xl px-6 py-3 text-white font-bold text-xs transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
             id="btn-save-settings"
           >
             <Save className="w-4 h-4" />

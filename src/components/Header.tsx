@@ -1,4 +1,4 @@
-import { Mail, Shield, LogOut, User } from 'lucide-react';
+import { Shield, LogOut, User } from 'lucide-react';
 
 interface HeaderProps {
   activeTab: string;
@@ -29,16 +29,16 @@ export default function Header({ activeTab, setActiveTab, hasApiKey, userProfile
         </div>
 
         {/* Navigation Tabs */}
-        <nav className="flex items-center bg-white/5 border border-white/10 rounded-xl p-1 shadow-inner gap-1">
+        <nav className="flex items-center glass-panel rounded-xl p-1 shadow-inner gap-1">
           {['Dashboard', 'History', 'Console Logs', 'Settings'].map((tab) => {
             const isTabActive = activeTab === tab;
             return (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-300 cursor-pointer ${
+                className={`flex-1 flex items-center justify-center py-1.5 rounded-lg text-xs font-medium transition-all duration-300 cursor-pointer ${
                   isTabActive
-                    ? 'bg-white text-black shadow-md font-semibold'
+                    ? 'bg-white/20 text-white shadow-md font-semibold'
                     : 'text-gray-400 hover:text-white hover:bg-white/5'
                 }`}
                 id={`tab-${tab.toLowerCase().replace(' ', '-')}`}

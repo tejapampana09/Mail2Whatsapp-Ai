@@ -2,39 +2,62 @@
 @import "tailwindcss";
 
 :root {
-  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* iOS-inspired glass variables */
+  --glass-bg: rgba(255, 255, 255, 0.08);
+  --glass-bg-hover: rgba(255, 255, 255, 0.12);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-border-hover: rgba(255, 255, 255, 0.18);
+  --glass-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  --glass-inner-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.15);
+  --glass-blur: blur(30px) saturate(150%);
+  --glass-blur-hover: blur(28px) saturate(160%);
 }
 
+/* Base styles */
 body {
   background-color: #030303;
   color: #f3f4f6;
   overflow-x: hidden;
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
-/* Glassmorphism Styles */
+/* Glassmorphism - iOS style */
 .glass-panel {
-  background: rgba(18, 18, 22, 0.45);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-}
-
-.glass-card {
-  background: rgba(255, 255, 255, 0.02);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.05);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), var(--glass-inner-shadow);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.glass-card:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.1);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+.glass-panel:hover {
+  background: var(--glass-bg-hover);
+  backdrop-filter: var(--glass-blur-hover);
+  -webkit-backdrop-filter: var(--glass-blur-hover);
+  border: 1px solid var(--glass-border-hover);
+  box-shadow: var(--glass-shadow), var(--glass-inner-shadow);
 }
 
+/* Glass cards - elevated containers */
+.glass-card {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1), 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.12), 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Inputs */
 .glass-input {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -51,7 +74,7 @@ body {
   box-shadow: 0 0 12px rgba(99, 102, 241, 0.25);
 }
 
-/* Liquid Blob Background */
+/* Liquid Blob Background - kept as is for ambiance */
 .bg-blob {
   position: absolute;
   width: 600px;
@@ -98,3 +121,30 @@ body {
   background: rgba(255, 255, 255, 0.25);
 }
 
+/* iOS-inspired typography enhancements */
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.5px;
+}
+
+/* Animation for interactive elements */
+.animate-fast {
+  animation-duration: 0.15s;
+}
+
+/* Focus ring for accessibility */
+.focus-ring {
+  outline: 2px solid rgba(99, 102, 241, 0.5);
+  outline-offset: 2px;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .bg-blob {
+    animation: none !important;
+  }
+}

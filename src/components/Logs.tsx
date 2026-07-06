@@ -71,14 +71,14 @@ export default function Logs({ logs, onClear, onReset }: LogsProps) {
           <div className="flex items-center space-x-3">
             <button
               onClick={onClear}
-              className="flex items-center space-x-1.5 text-xs text-gray-400 hover:text-white hover:bg-white/5 px-3.5 py-1.5 rounded-xl transition-all border border-white/10 cursor-pointer"
+              className="glass-panel rounded-xl px-3.5 py-1.5 flex items-center space-x-1.5 text-xs font-semibold text-gray-300 hover:text-white hover:border-white/20 transition-all cursor-pointer"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Clear Console</span>
             </button>
             <button
               onClick={handleResetClick}
-              className="flex items-center space-x-1.5 text-xs text-red-400 hover:text-white hover:bg-red-500/10 px-3.5 py-1.5 rounded-xl transition-all border border-red-500/25 cursor-pointer"
+              className="glass-panel rounded-xl px-3.5 py-1.5 flex items-center space-x-1.5 text-xs font-semibold text-red-400 hover:text-white hover:border-red-500/20 transition-all cursor-pointer"
             >
               <AlertTriangle className="w-3.5 h-3.5" />
               <span>Reset Sandbox</span>
@@ -94,7 +94,7 @@ export default function Logs({ logs, onClear, onReset }: LogsProps) {
               placeholder="Search description, logs, system types..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl py-2.5 pl-10 pr-4 text-xs text-white transition-all outline-none"
+              className="glass-input w-full pl-10 pr-4 text-xs text-white transition-all"
             />
           </div>
 
@@ -102,7 +102,7 @@ export default function Logs({ logs, onClear, onReset }: LogsProps) {
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-2.5 text-xs text-white outline-none transition-all cursor-pointer"
+              className="glass-input w-full p-2.5 text-xs text-white transition-all cursor-pointer"
             >
               <option value="all" className="bg-[#121216]">All Operations</option>
               {logTypes.map((type) => (
@@ -115,7 +115,7 @@ export default function Logs({ logs, onClear, onReset }: LogsProps) {
             <select
               value={filterLevel}
               onChange={(e) => setFilterLevel(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-2.5 text-xs text-white outline-none transition-all cursor-pointer"
+              className="glass-input w-full p-2.5 text-xs text-white transition-all cursor-pointer"
             >
               <option value="all" className="bg-[#121216]">All Severity Levels</option>
               <option value="INFO" className="bg-[#121216]">INFO</option>

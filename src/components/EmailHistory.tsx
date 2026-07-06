@@ -93,7 +93,7 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
               placeholder="Search sender, subject, summary contents..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl py-2.5 pl-10 pr-4 text-xs text-white transition-all outline-none"
+              className="glass-input w-full pl-10 pr-4 text-xs text-white transition-all"
             />
           </div>
 
@@ -101,7 +101,7 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-2.5 text-xs text-white outline-none transition-all cursor-pointer"
+              className="glass-input w-full p-2.5 text-xs text-white transition-all cursor-pointer"
             >
               <option value="all" className="bg-[#121216]">All Categories</option>
               <option value="Work" className="bg-[#121216]">Work</option>
@@ -123,7 +123,7 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
             <select
               value={selectedImportance}
               onChange={(e) => setSelectedImportance(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 focus:border-white rounded-xl p-2.5 text-xs text-white outline-none transition-all cursor-pointer"
+              className="glass-input w-full p-2.5 text-xs text-white transition-all cursor-pointer"
             >
               <option value="all" className="bg-[#121216]">All Priority Levels</option>
               <option value="High" className="bg-[#121216]">High Importance</option>
@@ -224,7 +224,7 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
                     </span>
                     <button
                       onClick={(e) => handleDeleteClick(email.id, e)}
-                      className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all cursor-pointer"
+                      className="glass-panel rounded-xl p-1.5 flex items-center justify-center text-red-400 hover:text-white hover:border-red-500/20 transition-all cursor-pointer"
                       title="Delete summary"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -266,21 +266,21 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
 
             {/* Email Properties List */}
             <div className="grid grid-cols-2 gap-4 text-xs">
-              <div className="border border-white/5 rounded-2xl p-3.5 bg-white/2">
+              <div className="glass-card border border-white/5 rounded-2xl p-3.5 shadow-sm">
                 <span className="text-[9px] font-mono text-gray-400 uppercase block mb-1">AI Classification</span>
                 <span className={`px-2.5 py-0.5 rounded-full border text-[9px] font-mono inline-block ${getCategoryStyle(selectedEmail.category)}`}>
                   {selectedEmail.category}
                 </span>
               </div>
 
-              <div className="border border-white/5 rounded-2xl p-3.5 bg-white/2">
+              <div className="glass-card border border-white/5 rounded-2xl p-3.5 shadow-sm">
                 <span className="text-[9px] font-mono text-gray-400 uppercase block mb-1">AI Urgency Rating</span>
                 <span className={`px-2.5 py-0.5 rounded-full border text-[9px] font-mono inline-block ${getImportanceStyle(selectedEmail.importance)}`}>
                   {selectedEmail.importance}
                 </span>
               </div>
 
-              <div className="border border-white/5 rounded-2xl p-3.5 bg-white/2 col-span-2">
+              <div className="glass-card border border-white/5 rounded-2xl p-3.5 shadow-sm col-span-2">
                 <span className="text-[9px] font-mono text-gray-400 uppercase block mb-1">WhatsApp Notification Status</span>
                 <div className="flex items-center space-x-1.5 font-mono text-xs mt-1">
                   {selectedEmail.whatsappStatus === 'Sent' ? (
@@ -394,7 +394,7 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
             <div className="flex justify-end pt-4 border-t border-white/5">
               <button
                 onClick={(e) => handleDeleteClick(selectedEmail.id, e)}
-                className="flex items-center space-x-1.5 text-xs font-semibold text-red-400 hover:text-white bg-transparent hover:bg-red-500/10 border border-red-500/20 px-4 py-2.5 rounded-xl transition-all cursor-pointer"
+                className="glass-panel rounded-xl px-4 py-2 flex items-center space-x-2 text-xs font-semibold text-red-400 hover:text-white hover:border-red-500/20 transition-all cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
                 <span>Delete Summary</span>
