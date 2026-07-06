@@ -1,4 +1,4 @@
-﻿import express from 'express';
+import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
@@ -793,6 +793,9 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
 // Background Sync Daemon
 // ----------------------------------------------------
 
+// In-memory per-user last sync timestamp to prevent runaway loops
+const lastSyncTime = new Map<string, number>();
+
 async function startSyncDaemon() {
   console.log('Background Sync Daemon activated.');
   
@@ -800,34 +803,20 @@ async function startSyncDaemon() {
   setInterval(async () => {
     try {
       const database = await initDb();
-      // Query all users that have Google credentials
-      const tokens = database.prepare("SELECT user_id FROM oauth_tokens WHERE provider = 'google'").all();
+      const tokens = database.prepare("SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = 'google'").all();
       
       for (const t of tokens as any[]) {
         const userId = (t as any).user_id;
         const settings = await getSettings(userId);
         if (!settings) continue;
 
-        const pollIntervalMin = settings.gmail_poll_interval || 5;
+        const pollIntervalMs = (settings.gmail_poll_interval || 5) * 60 * 1000;
+        const lastSync = lastSyncTime.get(userId) || 0;
+        const elapsed = Date.now() - lastSync;
 
-        // Query the latest GMAIL_POLL log to see when the last poll occurred
-        const lastPollLog = database.prepare(
-          "SELECT created_at FROM logs WHERE user_id = ? AND type = 'GMAIL_POLL' ORDER BY created_at DESC LIMIT 1"
-        ).get(userId);
-
-        let runSync = false;
-        if (!lastPollLog) {
-          runSync = true;
-        } else {
-          const lastPollTime = new Date(lastPollLog.created_at).getTime();
-          const elapsedMin = (Date.now() - lastPollTime) / (60 * 1000);
-          if (elapsedMin >= pollIntervalMin) {
-            runSync = true;
-          }
-        }
-
-        if (runSync) {
+        if (elapsed >= pollIntervalMs) {
           console.log(`[Daemon] Triggering background sync for user ${userId}...`);
+          lastSyncTime.set(userId, Date.now()); // Set BEFORE running to prevent concurrent triggers
           runSyncForUser(userId).catch((err) => {
             console.error(`[Daemon] Sync failed for user ${userId}:`, err);
           });
@@ -840,6 +829,7 @@ async function startSyncDaemon() {
 }
 
 startSyncDaemon();
+
 
 // ----------------------------------------------------
 // Daily Digest Scheduler (Every morning at 8:00 AM IST)
