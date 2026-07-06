@@ -84,10 +84,9 @@ const worker = new Worker('email-processing', async job => {
 
     // Update DB record with final analysis results
     const db = await getDb();
-    await db.query(
-      `UPDATE emails SET category=$1, importance=$2, summary=$3, whatsapp_status=$4, whatsapp_message_id=$5, delivery_error=$6, ai_metadata=$7 WHERE user_id=$8 AND gmail_message_id=$9`,
-      [category, importance, summary, whatsappStatus, whatsappMsgId || null, deliveryErr || null, aiMetadata ? JSON.stringify(aiMetadata) : null, userId, rawEmail.id]
-    );
+    db.prepare(
+      `UPDATE emails SET category=?, importance=?, summary=?, whatsapp_status=?, whatsapp_message_id=?, delivery_error=?, ai_metadata=? WHERE user_id=? AND gmail_message_id=?`
+    ).run(category, importance, summary, whatsappStatus, whatsappMsgId || null, deliveryErr || null, aiMetadata ? JSON.stringify(aiMetadata) : null, userId, rawEmail.id);
 
     // Mark as read in Gmail
     try { await markEmailAsRead(refreshToken, rawEmail.id); } catch (_) {}
