@@ -26,6 +26,7 @@ COPY --from=builder /app/db.ts ./
 COPY --from=builder /app/ai.ts ./
 COPY --from=builder /app/gmail.ts ./
 COPY --from=builder /app/whatsapp.ts ./
+COPY --from=builder /app/logger.service.ts ./
 COPY --from=builder /app/tsconfig.json ./
 COPY --from=builder /app/vite.config.ts ./
 COPY --from=builder /app/index.html ./
