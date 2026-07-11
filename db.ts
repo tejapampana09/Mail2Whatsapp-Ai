@@ -151,13 +151,13 @@ export async function getDb(): Promise<Database.Database> {
 export async function getUser(id: string) {
   const database = await getDb();
   const stmt = database.prepare('SELECT * FROM users WHERE id = ?');
-  return stmt.get(id);
+  return stmt.get(id) as any;
 }
 
 export async function getUserByEmail(email: string) {
   const database = await getDb();
   const stmt = database.prepare('SELECT * FROM users WHERE email = ?');
-  return stmt.get(email);
+  return stmt.get(email) as any;
 }
 
 export async function upsertUser(user: { id: string; email: string; name: string; avatar: string }) {

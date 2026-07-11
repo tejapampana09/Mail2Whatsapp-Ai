@@ -297,7 +297,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
     // Check if this is an "add additional account" flow
     const state = req.query.state as string || '';
     if (state.startsWith('add_account:')) {
-      const [flow, existingUserId, existingJwt] = state.split(':');
+      const [, existingUserId, existingJwt] = state.split(':');
       if (existingUserId) {
         // Save as additional Gmail account token for the existing user
         await saveGoogleAccountToken({
@@ -852,7 +852,7 @@ async function startDailyDigestScheduler() {
       const tokens = database.prepare('SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = ?').all('google');
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-      for (const t of tokens) {
+      for (const t of tokens as any[]) {
         const userId = t.user_id;
         const settings = await getSettings(userId);
         if (!settings?.whatsapp_notifications_enabled || !settings?.whatsapp_number) continue;
@@ -919,7 +919,7 @@ app.post('/webhook/gmail', async (req, res) => {
 
     // Find user by email and trigger sync
     const database = await getDb();
-    const user = database.prepare('SELECT id FROM users WHERE email = ?').get(emailAddress);
+    const user = database.prepare('SELECT id FROM users WHERE email = ?').get(emailAddress) as { id: string } | undefined;
     if (user) {
       console.log(`[Pub/Sub] Triggering instant sync for user ${user.id}...`);
       runSyncForUser(user.id).catch((err) => {

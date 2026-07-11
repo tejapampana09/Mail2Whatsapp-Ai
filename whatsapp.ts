@@ -333,13 +333,11 @@ export async function sendWhatsAppVoiceSummary(
     const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
 
     // Step 2: Upload audio to WhatsApp Media API
-    const { Blob } = await import('node:buffer');
-
     const uploadUrl = `https://graph.facebook.com/v20.0/${phoneId}/media`;
     const uploadFormData = new (globalThis.FormData)();
     uploadFormData.append('messaging_product', 'whatsapp');
     uploadFormData.append('type', 'audio/mpeg');
-    uploadFormData.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'summary.mp3');
+    uploadFormData.append('file', new globalThis.Blob([audioBuffer], { type: 'audio/mpeg' }), 'summary.mp3');
 
     const uploadRes = await fetch(uploadUrl, {
       method: 'POST',
