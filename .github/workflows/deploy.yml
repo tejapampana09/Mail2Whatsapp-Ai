@@ -28,7 +28,7 @@ jobs:
 
             echo "📥 Resetting any local changes and pulling latest changes from GitHub..."
             git reset --hard
-            git pull origin master
+            git pull -4 origin master
 
             echo "📦 Installing dependencies..."
             npm install
