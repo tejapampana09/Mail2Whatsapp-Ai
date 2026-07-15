@@ -157,3 +157,4 @@ To register your own number and get rid of sandbox test-number limitations:
 
 ## 📜 Privacy & Security
 This application is self-hosted. All fetched emails are processed in-memory and details are stored locally inside `database.db`. No data is ever transmitted to any third-party analytics company.
+
