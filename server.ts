@@ -51,8 +51,7 @@ import {
   sendWhatsAppAlert,
   sendWhatsAppDigest,
   sendWhatsAppVoiceSummary,
-  checkWhatsAppConfig,
-  getWhatsAppConfigStatus
+  checkWhatsAppConfig
 } from './whatsapp.ts';
 
 dotenv.config();
@@ -559,38 +558,6 @@ app.post('/api/settings', authenticateToken, async (req: AuthenticatedRequest, r
         whatsappConnected
       }
     });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/whatsapp/config-status', authenticateToken, (_req: AuthenticatedRequest, res) => {
-  try {
-    const status = getWhatsAppConfigStatus();
-    res.json(status);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/whatsapp/test', authenticateToken, async (req: AuthenticatedRequest, res) => {
-  try {
-    const settings = await getSettings(req.user!.id);
-    if (!settings || !settings.whatsapp_number) {
-      return res.status(400).json({ error: 'WhatsApp number not configured in settings.' });
-    }
-    const result = await sendWhatsAppAlert(settings.whatsapp_number, {
-      from: 'System Test',
-      subject: 'Mail2WhatsApp Integration Test',
-      category: 'System',
-      importance: 'High',
-      summary: 'This is a test notification verifying your WhatsApp Cloud API credentials and template integration are fully operational.'
-    });
-    if (result.status === 'Sent') {
-      res.json({ success: true, messageId: result.messageId });
-    } else {
-      res.status(500).json({ error: result.error || 'Failed to send test message.' });
-    }
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
