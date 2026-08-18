@@ -42,6 +42,20 @@ export default function Settings({ settings, onSave }: SettingsProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
+  // WhatsApp template configuration checks state
+  const [waConfigStatus, setWaConfigStatus] = useState<{
+    configured: boolean;
+    credentialsConfigured: boolean;
+    alertTemplateConfigured: boolean;
+    digestTemplateConfigured: boolean;
+    voiceEnabled: boolean;
+    missing: string[];
+    alertTemplateName: string | null;
+    digestTemplateName: string | null;
+  } | null>(null);
+  const [isTestingWhatsApp, setIsTestingWhatsApp] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message?: string } | null>(null);
+
   // Multi-Gmail accounts state
   const [gmailAccounts, setGmailAccounts] = useState<ConnectedAccount[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(false);
@@ -65,6 +79,22 @@ export default function Settings({ settings, onSave }: SettingsProps) {
     }
   };
 
+  const fetchWhatsAppConfigStatus = async () => {
+    try {
+      const res = await fetch('/api/whatsapp/config-status', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('mail2whatsapp_token')}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWaConfigStatus(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch WhatsApp config status:', err);
+    }
+  };
+
   // Sync state with incoming props on load
   useEffect(() => {
     if (settings) {
@@ -81,6 +111,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
       setWhatsappConnected(!!settings.whatsappConnected);
     }
     fetchConnectedAccounts();
+    fetchWhatsAppConfigStatus();
   }, [settings]);
 
   const toggleCategory = (cat: string) => {
@@ -242,7 +273,7 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                   <span className="text-sm font-semibold text-white">WhatsApp Cloud API</span>
                 </div>
                 <div className="flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-black/40 border border-white/5">
-                  {whatsappConnected ? (
+                  {waConfigStatus?.configured ? (
                     <>
                       <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                       <span className="text-[9px] font-mono font-semibold uppercase text-emerald-400">READY</span>
@@ -250,16 +281,36 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                   ) : (
                     <>
                       <XCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <span className="text-[9px] font-mono font-semibold uppercase text-amber-400">UNCONFIGURED</span>
+                      <span className="text-[9px] font-mono font-semibold uppercase text-amber-400">INCOMPLETE</span>
                     </>
                   )}
                 </div>
               </div>
-              <p className="text-[11px] text-gray-400 leading-relaxed">
-                Requires <code>WHATSAPP_ACCESS_TOKEN</code> and <code>WHATSAPP_PHONE_NUMBER_ID</code> environment variables to send alerts.
-              </p>
-              <div className="text-[10px] font-mono text-gray-500">
-                {whatsappConnected ? '✓ Meta Cloud Gateway is live.' : '⚠ Configure .env variables on backend.'}
+              <div className="text-[11px] space-y-1 text-gray-300">
+                <div className="flex items-center space-x-1">
+                  {waConfigStatus?.credentialsConfigured ? (
+                    <span className="text-emerald-400">✓ API credentials configured</span>
+                  ) : (
+                    <span className="text-red-400">⚠ API credentials missing</span>
+                  )}
+                </div>
+                <div className="flex items-center space-x-1">
+                  {waConfigStatus?.alertTemplateConfigured ? (
+                    <span className="text-emerald-400">✓ Alert template configured ({waConfigStatus?.alertTemplateName})</span>
+                  ) : (
+                    <span className="text-red-400">⚠ Alert template missing</span>
+                  )}
+                </div>
+                <div className="flex items-center space-x-1">
+                  {waConfigStatus?.digestTemplateConfigured ? (
+                    <span className="text-emerald-400">✓ Daily digest template configured ({waConfigStatus?.digestTemplateName})</span>
+                  ) : (
+                    <span className="text-red-400">⚠ Daily digest template missing</span>
+                  )}
+                </div>
+              </div>
+              <div className="text-[10px] font-mono text-gray-500 leading-tight">
+                {waConfigStatus?.configured ? '✓ Message-ready. Proactive templates loaded.' : '⚠ Verify .env configuration.'}
               </div>
             </div>
           </div>
@@ -545,22 +596,102 @@ export default function Settings({ settings, onSave }: SettingsProps) {
 
             {/* Target Phone number */}
             {whatsappNotificationsEnabled && (
-              <div className="space-y-2 pt-2 animate-fade-in">
-                <label className="text-[11px] font-mono tracking-wider text-gray-400 uppercase block">
-                  Alert Telephone Number
-                </label>
-                <input
-                  type="text"
-                  placeholder="+1 (555) 019-2834"
-                  value={whatsappNumber}
-                  onChange={(e) => setWhatsappNumber(e.target.value)}
-                  className="glass-input w-full font-sans transition-all"
-                  required={whatsappNotificationsEnabled}
-                />
-                <p className="text-[10px] text-gray-500">
-                  Enter target alert line in E.164 international formats for simulated secure push.
-                </p>
-              </div>
+              <>
+                <div className="space-y-2 pt-2 animate-fade-in">
+                  <label className="text-[11px] font-mono tracking-wider text-gray-400 uppercase block">
+                    Alert Telephone Number
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="+1 (555) 019-2834"
+                    value={whatsappNumber}
+                    onChange={(e) => setWhatsappNumber(e.target.value)}
+                    className="glass-input w-full font-sans transition-all"
+                    required={whatsappNotificationsEnabled}
+                  />
+                  <p className="text-[10px] text-gray-500">
+                    Enter target alert line in E.164 international formats for simulated secure push.
+                  </p>
+                </div>
+
+                <div className="glass-card rounded-2xl p-4 border border-white/5 space-y-3">
+                  <span className="text-[11px] font-mono tracking-wider text-gray-400 uppercase block">
+                    Meta WhatsApp Config Status
+                  </span>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex items-center space-x-2">
+                      {waConfigStatus?.credentialsConfigured ? (
+                        <span className="text-emerald-400">✓ API credentials configured</span>
+                      ) : (
+                        <span className="text-red-400">⚠ API credentials missing</span>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {waConfigStatus?.alertTemplateConfigured ? (
+                        <span className="text-emerald-400">✓ Alert template configured ({waConfigStatus?.alertTemplateName})</span>
+                      ) : (
+                        <span className="text-red-400">⚠ Alert template missing</span>
+                      )}
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {waConfigStatus?.digestTemplateConfigured ? (
+                        <span className="text-emerald-400">✓ Daily digest template configured ({waConfigStatus?.digestTemplateName})</span>
+                      ) : (
+                        <span className="text-red-400">⚠ Daily digest template missing</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 text-[11px] text-gray-400 bg-white/5 rounded-xl p-3 border border-white/5 leading-relaxed">
+                    📢 <strong>Manual "Hi" is NOT required.</strong> WhatsApp notifications use approved Meta templates for proactive messages. After the initial Meta setup/opt-in, Mail2WhatsApp can send eligible notifications automatically without requiring you to message "Hi" before every alert.
+                  </div>
+
+                  {whatsappNumber && (
+                    <div className="pt-3 border-t border-white/5 flex flex-col space-y-2">
+                      <button
+                        type="button"
+                        disabled={isTestingWhatsApp || !waConfigStatus?.credentialsConfigured || !waConfigStatus?.alertTemplateConfigured}
+                        onClick={async () => {
+                          setIsTestingWhatsApp(true);
+                          setTestResult(null);
+                          try {
+                            const res = await fetch('/api/whatsapp/test', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${localStorage.getItem('mail2whatsapp_token')}`
+                              }
+                            });
+                            const data = await res.json();
+                            if (res.ok) {
+                              setTestResult({ success: true, message: `Test template alert dispatched successfully! ID: ${data.messageId}` });
+                            } else {
+                              setTestResult({ success: false, message: data.error || 'Failed to send test template alert.' });
+                            }
+                          } catch (err: any) {
+                            setTestResult({ success: false, message: err.message });
+                          } finally {
+                            setIsTestingWhatsApp(false);
+                          }
+                        }}
+                        className="w-full glass-panel rounded-xl py-2 px-3 text-center text-xs font-semibold text-indigo-400 hover:text-indigo-300 hover:border-indigo-400/25 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {isTestingWhatsApp ? 'Sending Test Alert...' : 'Send Test Alert'}
+                      </button>
+
+                      {testResult && (
+                        <div className={`text-[11px] p-2.5 rounded-lg border ${
+                          testResult.success 
+                            ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400' 
+                            : 'bg-red-500/10 border-red-500/25 text-red-400'
+                        }`}>
+                          {testResult.message}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </div>

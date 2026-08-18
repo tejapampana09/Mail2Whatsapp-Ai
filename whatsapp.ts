@@ -95,26 +95,19 @@ function buildAlertMessage(
   return message;
 }
 
-export async function sendWhatsAppAlert(
+export async function sendWhatsAppTemplate(
   toNumber: string,
-  emailDetails: { from: string; subject: string; category: string; importance: string; summary: string },
-  aiMetadata?: any
+  templateName: string,
+  templateLang: string,
+  parameters: string[]
 ): Promise<WhatsAppSendResult> {
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
 
   if (!token || !phoneId || token.includes('replace_me') || phoneId.includes('replace_me')) {
-    console.warn('WhatsApp Cloud API credentials not configured in environment variables.');
     return {
       status: 'Failed',
-      error: 'WhatsApp API credentials not configured in backend environment.'
-    };
-  }
-
-  if (!toNumber) {
-    return {
-      status: 'Failed',
-      error: 'Alert destination phone number is missing in system settings.'
+      error: 'WhatsApp API credentials not configured.'
     };
   }
 
@@ -122,26 +115,25 @@ export async function sendWhatsAppAlert(
   if (!cleanNumber) {
     return {
       status: 'Failed',
-      error: 'Alert destination phone number is invalid. Use an international format such as +15551234567.'
+      error: 'Invalid phone number.'
     };
   }
 
-  const messageText = buildAlertMessage(emailDetails, aiMetadata);
+  if (!templateName) {
+    return {
+      status: 'Failed',
+      error: 'WhatsApp approved template is not configured.'
+    };
+  }
 
   const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
 
-  const templateName = process.env.WHATSAPP_TEMPLATE_NAME;
-  const templateLang = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
-
-  const payload: any = {
+  const payload = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to: cleanNumber
-  };
-
-  if (templateName) {
-    payload.type = 'template';
-    payload.template = {
+    to: cleanNumber,
+    type: 'template',
+    template: {
       name: templateName,
       language: {
         code: templateLang
@@ -149,25 +141,13 @@ export async function sendWhatsAppAlert(
       components: [
         {
           type: 'body',
-          parameters: [
-            { type: 'text', text: emailDetails.from },
-            { type: 'text', text: emailDetails.subject },
-            { type: 'text', text: emailDetails.category },
-            { type: 'text', text: emailDetails.importance },
-            { type: 'text', text: emailDetails.summary }
-          ]
+          parameters: parameters.map(p => ({ type: 'text', text: p }))
         }
       ]
-    };
-  } else {
-    payload.type = 'text';
-    payload.text = {
-      preview_url: false,
-      body: messageText
-    };
-  }
+    }
+  };
 
-  const dispatchMessage = async () => {
+  const dispatch = async () => {
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -186,41 +166,95 @@ export async function sendWhatsAppAlert(
 
     if (!response.ok) {
       const errorPayload = resJson?.error;
-      const authMessage = getWhatsAppAuthFailureMessage(response.status, errorPayload);
-      throw new Error(authMessage);
+      const errorMsg = errorPayload?.message || `HTTP ${response.status}`;
+      const errorCode = errorPayload?.code;
+
+      let mappedError = errorMsg;
+      if (errorCode === 132000) {
+        mappedError = 'WhatsApp template parameter count/type does not match the approved template.';
+      } else if (response.status === 401 || errorCode === 190) {
+        mappedError = 'WhatsApp authentication failed. Verify access token and phone number ID.';
+      }
+
+      const err = new Error(mappedError);
+      (err as any).statusCode = response.status;
+      (err as any).code = errorCode;
+      throw err;
     }
 
     return resJson;
   };
 
+  const isTransientError = (err: any) => {
+    const status = err.statusCode;
+    const code = err.code;
+    if (status === 500 || status === 502 || status === 503 || status === 504 || status === 429) {
+      return true;
+    }
+    if (code === 4 || code === 80007) {
+      return true;
+    }
+    return false;
+  };
+
   try {
-    // Attempt 1
-    const resData = await dispatchMessage();
-    const messageId = resData.messages?.[0]?.id;
+    const resData = await dispatch();
     return {
       status: 'Sent',
-      messageId
+      messageId: resData.messages?.[0]?.id
     };
   } catch (err: any) {
-    console.error('WhatsApp dispatch attempt 1 failed:', err.message);
-
-    // Retry once
-    try {
-      console.log('Retrying WhatsApp dispatch once...');
-      const resData = await dispatchMessage();
-      const messageId = resData.messages?.[0]?.id;
-      return {
-        status: 'Sent',
-        messageId
-      };
-    } catch (retryErr: any) {
-      console.error('WhatsApp dispatch attempt 2 (retry) failed:', retryErr.message);
+    if (isTransientError(err)) {
+      console.warn('Transient WhatsApp error encountered, retrying in 2 seconds...', err.message);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      try {
+        const resData = await dispatch();
+        return {
+          status: 'Sent',
+          messageId: resData.messages?.[0]?.id
+        };
+      } catch (retryErr: any) {
+        console.error('WhatsApp retry attempt failed:', retryErr.message);
+        return {
+          status: 'Failed',
+          error: retryErr.message
+        };
+      }
+    } else {
+      console.error('Permanent WhatsApp error encountered, skipping retry:', err.message);
       return {
         status: 'Failed',
-        error: retryErr.message || 'Unknown WhatsApp API dispatch failure.'
+        error: err.message
       };
     }
   }
+}
+
+export async function sendWhatsAppAlert(
+  toNumber: string,
+  emailDetails: { from: string; subject: string; category: string; importance: string; summary: string },
+  aiMetadata?: any
+): Promise<WhatsAppSendResult> {
+  const templateName = process.env.WHATSAPP_TEMPLATE_NAME;
+  const templateLang = process.env.WHATSAPP_TEMPLATE_LANG || 'en_US';
+
+  if (!templateName) {
+    console.error('WHATSAPP_TEMPLATE_NAME is not configured in backend environment.');
+    return {
+      status: 'Failed',
+      error: 'WhatsApp approved template is not configured.'
+    };
+  }
+
+  const params = [
+    emailDetails.from,
+    emailDetails.subject,
+    emailDetails.category,
+    emailDetails.importance,
+    emailDetails.summary
+  ];
+
+  return sendWhatsAppTemplate(toNumber, templateName, templateLang, params);
 }
 
 export async function sendWhatsAppDigest(
@@ -234,68 +268,68 @@ export async function sendWhatsAppDigest(
     topSubjects: string[];
   }
 ): Promise<WhatsAppSendResult> {
+  const digestTemplate = process.env.WHATSAPP_DIGEST_TEMPLATE_NAME;
+  const digestLang = process.env.WHATSAPP_DIGEST_TEMPLATE_LANG || 'en_US';
+
+  if (!digestTemplate) {
+    console.error('WHATSAPP_DIGEST_TEMPLATE_NAME is not configured in backend environment.');
+    return {
+      status: 'Failed',
+      error: 'Daily digest WhatsApp template is not configured.'
+    };
+  }
+
+  const now = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
+  const topSubjectsStr = stats.topSubjects.slice(0, 3).map((s, i) => `${i + 1}. ${s.length > 40 ? s.substring(0, 37) + '...' : s}`).join(', ');
+
+  const params = [
+    now,
+    stats.total.toString(),
+    stats.high.toString(),
+    stats.medium.toString(),
+    stats.low.toString(),
+    topSubjectsStr || 'None'
+  ];
+
+  return sendWhatsAppTemplate(toNumber, digestTemplate, digestLang, params);
+}
+
+export function getWhatsAppConfigStatus() {
   const token = process.env.WHATSAPP_ACCESS_TOKEN;
   const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const alertTemplate = process.env.WHATSAPP_TEMPLATE_NAME;
+  const alertLang = process.env.WHATSAPP_TEMPLATE_LANG;
+  const digestTemplate = process.env.WHATSAPP_DIGEST_TEMPLATE_NAME;
+  const digestLang = process.env.WHATSAPP_DIGEST_TEMPLATE_LANG;
+  const voiceEnabled = process.env.WHATSAPP_VOICE_ENABLED === 'true';
 
-  if (!token || !phoneId || token.includes('replace_me') || phoneId.includes('replace_me')) {
-    return { status: 'Failed', error: 'WhatsApp API credentials not configured.' };
-  }
+  const credentialsConfigured = !!(token && phoneId && !token.includes('replace_me') && !phoneId.includes('replace_me'));
+  const alertTemplateConfigured = !!(alertTemplate && alertLang);
+  const digestTemplateConfigured = !!(digestTemplate && digestLang);
 
-  const cleanNumber = normalizeWhatsAppNumber(toNumber);
-  if (!cleanNumber) return { status: 'Failed', error: 'Invalid phone number.' };
+  const missing: string[] = [];
+  if (!token || token.includes('replace_me')) missing.push('WHATSAPP_ACCESS_TOKEN');
+  if (!phoneId || phoneId.includes('replace_me')) missing.push('WHATSAPP_PHONE_NUMBER_ID');
+  if (!alertTemplate) missing.push('WHATSAPP_TEMPLATE_NAME');
+  if (!alertLang) missing.push('WHATSAPP_TEMPLATE_LANG');
+  if (!digestTemplate) missing.push('WHATSAPP_DIGEST_TEMPLATE_NAME');
+  if (!digestLang) missing.push('WHATSAPP_DIGEST_TEMPLATE_LANG');
 
-  const divider = '━━━━━━━━━━━━━━━━━━━━━';
-  const now = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
-
-  let msg = `📊 *Daily Email Digest*\n${divider}\n`;
-  msg += `📅 *${now}*\n\n`;
-  msg += `📬 *Total Emails:* ${stats.total}\n`;
-  msg += `🔴 High Priority: ${stats.high}\n`;
-  msg += `🟡 Medium Priority: ${stats.medium}\n`;
-  msg += `🔵 Low Priority: ${stats.low}\n`;
-
-  if (Object.keys(stats.categories).length > 0) {
-    msg += `\n📂 *Categories:*\n`;
-    for (const [cat, count] of Object.entries(stats.categories).slice(0, 5)) {
-      msg += `  • ${cat}: ${count}\n`;
-    }
-  }
-
-  if (stats.topSubjects.length > 0) {
-    msg += `\n📌 *Top Subjects:*\n`;
-    stats.topSubjects.slice(0, 3).forEach((s, i) => {
-      const truncated = s.length > 50 ? s.substring(0, 47) + '...' : s;
-      msg += `  ${i + 1}. ${truncated}\n`;
-    });
-  }
-
-  msg += `\n${divider}\n🤖 _Mail2WhatsApp AI Daily Digest_`;
-
-  const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: cleanNumber,
-        type: 'text',
-        text: { preview_url: false, body: msg }
-      })
-    });
-    const resJson: any = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(resJson?.error?.message || `HTTP ${response.status}`);
-    return { status: 'Sent', messageId: resJson?.messages?.[0]?.id };
-  } catch (err: any) {
-    return { status: 'Failed', error: err.message };
-  }
+  return {
+    configured: credentialsConfigured && alertTemplateConfigured && digestTemplateConfigured,
+    credentialsConfigured,
+    alertTemplateConfigured,
+    digestTemplateConfigured,
+    voiceEnabled,
+    missing,
+    alertTemplateName: alertTemplate || null,
+    digestTemplateName: digestTemplate || null
+  };
 }
 
 export function checkWhatsAppConfig(): boolean {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  return !!(token && phoneId && !token.includes('replace_me') && !phoneId.includes('replace_me'));
+  const status = getWhatsAppConfigStatus();
+  return status.credentialsConfigured && status.alertTemplateConfigured;
 }
 
 // ----------------------------------------------------
