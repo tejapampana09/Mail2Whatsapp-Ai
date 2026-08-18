@@ -130,42 +130,16 @@ export async function sendWhatsAppAlert(
 
   const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
 
-  const templateName = process.env.WHATSAPP_TEMPLATE_NAME;
-  const templateLang = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
-
-  const payload: any = {
+  const payload = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to: cleanNumber
-  };
-
-  if (templateName) {
-    payload.type = 'template';
-    payload.template = {
-      name: templateName,
-      language: {
-        code: templateLang
-      },
-      components: [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: emailDetails.from },
-            { type: 'text', text: emailDetails.subject },
-            { type: 'text', text: emailDetails.category },
-            { type: 'text', text: emailDetails.importance },
-            { type: 'text', text: emailDetails.summary }
-          ]
-        }
-      ]
-    };
-  } else {
-    payload.type = 'text';
-    payload.text = {
+    to: cleanNumber,
+    type: 'text',
+    text: {
       preview_url: false,
       body: messageText
-    };
-  }
+    }
+  };
 
   const dispatchMessage = async () => {
     const response = await fetch(url, {
