@@ -564,7 +564,7 @@ app.post('/api/settings', authenticateToken, async (req: AuthenticatedRequest, r
   }
 });
 
-app.get('/api/whatsapp/config-status', authenticateToken, (req: AuthenticatedRequest, res) => {
+app.get('/api/whatsapp/config-status', authenticateToken, (_req: AuthenticatedRequest, res) => {
   try {
     const status = getWhatsAppConfigStatus();
     res.json(status);
