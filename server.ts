@@ -32,7 +32,9 @@ import {
   addLog,
   clearLogs,
   getEmailByWhatsAppMessageId,
-  updateEmailReadStatus
+  updateEmailReadStatus,
+  getUserIdByWhatsAppNumber,
+  getLatestEmail
 } from './db.ts';
 
 import {
@@ -975,15 +977,33 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     console.log(`[WhatsApp Webhook] Received message from ${fromNumber}: "${msgText}"`);
 
-    // We only process interactive replies (user must reply to a bot message)
-    if (!context || !context.id) {
-      // If it's a stand-alone message (like "Hi" or "help"), we can just reply with instruction text
+    // Resolve the target email using context reply OR fallback to user's latest email alert
+    let emailRow: any = null;
+ 
+    if (context && context.id) {
+      emailRow = await getEmailByWhatsAppMessageId(context.id);
+    } else {
+      const cleanMsg = msgText.toLowerCase();
+      const isCommand = msgText.startsWith('/reply ') || cleanMsg === '/read' || cleanMsg === '/archive' || cleanMsg === '/summary';
+ 
+      if (isCommand) {
+        const userId = await getUserIdByWhatsAppNumber(fromNumber);
+        if (userId) {
+          emailRow = await getLatestEmail(userId);
+          if (emailRow) {
+            console.log(`[WhatsApp Webhook] No context message ID, falling back to latest email for user ${userId}: ${emailRow.gmail_message_id}`);
+          }
+        }
+      }
+    }
+ 
+    if (!emailRow) {
       if (msgText.toLowerCase() === 'hi' || msgText.toLowerCase() === 'help') {
         const token = process.env.WHATSAPP_ACCESS_TOKEN;
         const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
         if (token && phoneId) {
           const cleanNumber = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
-          const instruction = `🤖 *Mail2WhatsApp AI Assistant*\n\nReply to any email alert with:\n• */reply <your message>* - Reply to the sender\n• */read* - Mark email as read\n• */archive* - Archive the email\n• */summary* - Get detailed email summary`;
+          const instruction = `🤖 *Mail2WhatsApp AI Assistant*\n\nReply to any email alert with:\n• */reply <your message>* - Reply to the sender\n• */read* - Mark email as read\n• */archive* - Archive the email\n• */summary* - Get detailed email summary\n\n_(Note: If you don't use the reply feature, commands will automatically apply to your latest email alert)._`;
           await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -996,17 +1016,12 @@ app.post('/webhook/whatsapp', async (req, res) => {
             })
           });
         }
+      } else {
+        console.warn(`[WhatsApp Webhook] Could not resolve context or find target email for reply.`);
       }
       return res.status(200).send('EVENT_RECEIVED');
     }
-
-    // Lookup original email by context.id (whatsapp_message_id)
-    const emailRow = await getEmailByWhatsAppMessageId(context.id);
-    if (!emailRow) {
-      console.warn(`[WhatsApp Webhook] No matching email found for whatsapp_message_id: ${context.id}`);
-      return res.status(200).send('EVENT_RECEIVED');
-    }
-
+ 
     // Retrieve user credentials
     const userId = emailRow.user_id;
     const tokenRow = await getOAuthToken(userId, 'google');
@@ -1014,7 +1029,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       console.error(`[WhatsApp Webhook] No Google credentials found for user: ${userId}`);
       return res.status(200).send('EVENT_RECEIVED');
     }
-
+ 
     const decryptedRefreshToken = tokenRow.refresh_token;
 
     // Handle commands

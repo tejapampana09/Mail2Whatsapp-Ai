@@ -74,8 +74,8 @@ The JSON structure must be exactly:
     "spamScore": 0-100 (probability score of being spam or scam),
     "calendarEvent": {
       "title": "Title of meeting or event",
-      "start": "ISO String or plain date string of start time",
-      "end": "ISO String or plain date string of end time"
+      "start": "Strict ISO 8601 Date String (YYYY-MM-DDTHH:mm:ssZ) of start time",
+      "end": "Strict ISO 8601 Date String (YYYY-MM-DDTHH:mm:ssZ) of end time, or null if unknown"
     } or null if no calendar event is detected
   }
 }`;

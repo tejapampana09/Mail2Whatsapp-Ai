@@ -497,6 +497,39 @@ export async function updateEmailReadStatus(id: string, isRead: boolean) {
   return stmt.run(isRead ? 1 : 0, id);
 }
 
+export async function getUserIdByWhatsAppNumber(whatsappNumber: string): Promise<string | null> {
+  const database = await getDb();
+  const stmt = database.prepare('SELECT user_id FROM settings WHERE whatsapp_number LIKE ?');
+  const clean = whatsappNumber.replace(/[^\d]/g, '');
+  const suffix = '%' + clean.slice(-10);
+  const row = stmt.get(suffix) as any;
+  return row ? row.user_id : null;
+}
+
+export async function getLatestEmail(userId: string): Promise<any | null> {
+  const database = await getDb();
+  const stmt = database.prepare('SELECT * FROM emails WHERE user_id = ? ORDER BY created_at DESC LIMIT 1');
+  const row = stmt.get(userId) as any;
+  if (!row) return null;
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    gmail_message_id: row.gmail_message_id,
+    from_address: row.from_address,
+    subject: row.subject,
+    content: row.content,
+    summary: row.summary,
+    category: row.category,
+    importance: row.importance,
+    date: row.date,
+    whatsapp_status: row.whatsapp_status,
+    whatsapp_message_id: row.whatsapp_message_id,
+    delivery_error: row.delivery_error,
+    is_read: row.is_read === 1,
+    created_at: row.created_at
+  };
+}
+
 // Logs (Execution Logs) DB Methods
 export async function getLogs(userId: string) {
   const database = await getDb();

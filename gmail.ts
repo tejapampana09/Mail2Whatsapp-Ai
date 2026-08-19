@@ -338,7 +338,13 @@ export async function createCalendarEvent(
 
   // Parse start date, fallback to 1 hour event if end is missing
   const start = new Date(eventDetails.start);
+  if (isNaN(start.getTime())) {
+    throw new Error(`Invalid start date format: "${eventDetails.start}"`);
+  }
   const end = eventDetails.end ? new Date(eventDetails.end) : new Date(start.getTime() + 60 * 60 * 1000);
+  if (isNaN(end.getTime())) {
+    throw new Error(`Invalid end date format: "${eventDetails.end}"`);
+  }
 
   const response = await calendar.events.insert({
     calendarId: 'primary',
