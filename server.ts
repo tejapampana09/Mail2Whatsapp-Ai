@@ -30,7 +30,9 @@ import {
   clearEmails,
   getLogs,
   addLog,
-  clearLogs
+  clearLogs,
+  getEmailByWhatsAppMessageId,
+  updateEmailReadStatus
 } from './db.ts';
 
 import {
@@ -39,7 +41,10 @@ import {
   getUserInfo,
   fetchUnreadEmails,
   markEmailAsRead,
-  watchGmailAccount
+  watchGmailAccount,
+  archiveEmail,
+  replyToEmail,
+  createCalendarEvent
 } from './gmail.ts';
 
 import {
@@ -710,7 +715,8 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
             rawEmail.body || rawEmail.snippet,
             settings.language,
             settings.ai_provider,
-            settings.ai_model
+            settings.ai_model,
+            rawEmail.downloadedAttachments
           );
           category = analysis.category;
           importance = analysis.importance;
@@ -726,6 +732,36 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
           aiMetadata = fallback.aiMetadata || null;
         }
 
+        // Google Calendar Auto-Scheduling (Feature 5)
+        if (aiMetadata && aiMetadata.calendarEvent) {
+          const event = aiMetadata.calendarEvent;
+          if (event.title && event.start) {
+            try {
+              await addLog(userId, 'INFO', 'CALENDAR_SYNC', `Detected meeting/event in email: "${event.title}". Auto-scheduling to Google Calendar...`);
+              await createCalendarEvent(accountToken.refreshToken, {
+                title: event.title,
+                start: event.start,
+                end: event.end
+              });
+              await addLog(userId, 'INFO', 'CALENDAR_SYNC', `Successfully scheduled Google Calendar event: "${event.title}" on ${event.start}.`);
+              
+              if (settings.whatsapp_notifications_enabled && settings.whatsapp_number) {
+                const calMsg = `📅 *Calendar Auto-Schedule*\n━━━━━━━━━━━━━━━━━━━━━\nEvent: *${event.title}*\nTime: ${new Date(event.start).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}\n\n🤖 _Scheduled via Mail2WhatsApp AI_`;
+                await sendWhatsAppAlert(settings.whatsapp_number, {
+                  from: 'Google Calendar Daemon',
+                  subject: `Scheduled Event: ${event.title}`,
+                  category: 'Meetings',
+                  importance: 'Medium',
+                  summary: calMsg
+                });
+              }
+            } catch (calErr: any) {
+              console.error(`Failed to auto-schedule Google Calendar event:`, calErr);
+              await addLog(userId, 'ERROR', 'CALENDAR_SYNC', `Failed to schedule event: ${calErr.message}`);
+            }
+          }
+        }
+ 
         // Skip if category is ignored
         if (settings.ignored_categories.includes(category)) {
           await addLog(userId, 'WARNING', 'OMIT_FILTER', `Omitted message from "${rawEmail.from}" (category "${category}" is ignored).`);
@@ -894,6 +930,144 @@ async function startDailyDigestScheduler() {
 }
 
 startDailyDigestScheduler();
+
+// ----------------------------------------------------
+// WhatsApp Webhook (Two-Way Interactive Replies)
+// ----------------------------------------------------
+app.get('/webhook/whatsapp', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'mail2whatsapp_verify_token';
+
+  if (mode === 'subscribe' && token === verifyToken) {
+    logger.info({ type: 'WEBHOOK_VERIFY', description: 'WhatsApp webhook verified successfully.' });
+    res.status(200).send(challenge);
+  } else {
+    logger.warn({ type: 'WEBHOOK_VERIFY_FAILED', description: 'WhatsApp webhook verification token mismatch.' });
+    res.sendStatus(403);
+  }
+});
+
+app.post('/webhook/whatsapp', async (req, res) => {
+  try {
+    const body = req.body;
+    
+    // Check if it's a WhatsApp message event
+    if (body.object !== 'whatsapp_business_account') {
+      return res.sendStatus(404);
+    }
+
+    const change = body.entry?.[0]?.changes?.[0]?.value;
+    if (!change || !change.messages || change.messages.length === 0) {
+      return res.status(200).send('EVENT_RECEIVED'); // Not a message event
+    }
+
+    const message = change.messages[0];
+    const fromNumber = message.from; // Sender's phone number
+    const msgText = message.text?.body?.trim();
+    const context = message.context; // Contains replied message details (context.id)
+
+    if (!msgText) {
+      return res.status(200).send('EVENT_RECEIVED');
+    }
+
+    console.log(`[WhatsApp Webhook] Received message from ${fromNumber}: "${msgText}"`);
+
+    // We only process interactive replies (user must reply to a bot message)
+    if (!context || !context.id) {
+      // If it's a stand-alone message (like "Hi" or "help"), we can just reply with instruction text
+      if (msgText.toLowerCase() === 'hi' || msgText.toLowerCase() === 'help') {
+        const token = process.env.WHATSAPP_ACCESS_TOKEN;
+        const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+        if (token && phoneId) {
+          const cleanNumber = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
+          const instruction = `🤖 *Mail2WhatsApp AI Assistant*\n\nReply to any email alert with:\n• */reply <your message>* - Reply to the sender\n• */read* - Mark email as read\n• */archive* - Archive the email\n• */summary* - Get detailed email summary`;
+          await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messaging_product: 'whatsapp',
+              recipient_type: 'individual',
+              to: cleanNumber,
+              type: 'text',
+              text: { preview_url: false, body: instruction }
+            })
+          });
+        }
+      }
+      return res.status(200).send('EVENT_RECEIVED');
+    }
+
+    // Lookup original email by context.id (whatsapp_message_id)
+    const emailRow = await getEmailByWhatsAppMessageId(context.id);
+    if (!emailRow) {
+      console.warn(`[WhatsApp Webhook] No matching email found for whatsapp_message_id: ${context.id}`);
+      return res.status(200).send('EVENT_RECEIVED');
+    }
+
+    // Retrieve user credentials
+    const userId = emailRow.user_id;
+    const tokenRow = await getOAuthToken(userId, 'google');
+    if (!tokenRow || !tokenRow.refresh_token) {
+      console.error(`[WhatsApp Webhook] No Google credentials found for user: ${userId}`);
+      return res.status(200).send('EVENT_RECEIVED');
+    }
+
+    const decryptedRefreshToken = tokenRow.refresh_token;
+
+    // Handle commands
+    const cleanMsg = msgText.toLowerCase();
+    const token = process.env.WHATSAPP_ACCESS_TOKEN;
+    const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const cleanNumber = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
+
+    let replyStatus = '';
+
+    if (msgText.startsWith('/reply ')) {
+      const replyContent = msgText.substring(7).trim();
+      if (!replyContent) {
+        replyStatus = '⚠️ Reply message cannot be empty.';
+      } else {
+        console.log(`[WhatsApp Webhook] Replying to email ${emailRow.gmail_message_id} with: "${replyContent}"`);
+        await replyToEmail(decryptedRefreshToken, emailRow.gmail_message_id, replyContent);
+        replyStatus = `✅ *Reply Sent successfully!* \n\n📨 *To:* ${emailRow.from_address}\n📝 *Message:* "${replyContent}"`;
+      }
+    } else if (cleanMsg === '/read') {
+      console.log(`[WhatsApp Webhook] Marking email ${emailRow.gmail_message_id} as read`);
+      await markEmailAsRead(decryptedRefreshToken, emailRow.gmail_message_id);
+      await updateEmailReadStatus(emailRow.id, true);
+      replyStatus = `✉️ *Email marked as read.*`;
+    } else if (cleanMsg === '/archive') {
+      console.log(`[WhatsApp Webhook] Archiving email ${emailRow.gmail_message_id}`);
+      await archiveEmail(decryptedRefreshToken, emailRow.gmail_message_id);
+      replyStatus = `📥 *Email archived.*`;
+    } else if (cleanMsg === '/summary') {
+      replyStatus = `💡 *AI Summary:*\n${emailRow.summary}`;
+    }
+
+    // Send confirmation message to user on WhatsApp
+    if (replyStatus && token && phoneId) {
+      await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: cleanNumber,
+          type: 'text',
+          text: { preview_url: false, body: replyStatus }
+        })
+      });
+    }
+
+    res.status(200).send('EVENT_RECEIVED');
+  } catch (err: any) {
+    console.error('[WhatsApp Webhook] Error processing incoming event:', err);
+    res.status(200).send('EVENT_RECEIVED'); // Keep return 200 to prevent retry storms from Meta
+  }
+});
 
 // ----------------------------------------------------
 // Gmail Pub/Sub Push Webhook (Instant Email Detection)

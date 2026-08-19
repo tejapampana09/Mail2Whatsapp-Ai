@@ -19,7 +19,8 @@ export function getAuthUrl() {
     'openid',
     'https://www.googleapis.com/auth/userinfo.email',
     'https://www.googleapis.com/auth/userinfo.profile',
-    'https://www.googleapis.com/auth/gmail.modify'
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/calendar.events'
   ];
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -42,6 +43,12 @@ export async function getUserInfo(accessToken: string) {
   return response.data;
 }
 
+export interface GmailAttachmentDetails {
+  filename: string;
+  mimeType: string;
+  data: string; // base64url
+}
+
 export interface GmailMessageDetails {
   id: string;
   from: string;
@@ -50,6 +57,7 @@ export interface GmailMessageDetails {
   snippet: string;
   body: string;
   attachments: string[];
+  downloadedAttachments?: GmailAttachmentDetails[];
 }
 
 export async function fetchUnreadEmails(
@@ -90,6 +98,11 @@ export async function fetchUnreadEmails(
       const body = extractBody(payload);
       const attachments = extractAttachments(payload);
       
+      const downloadedAttachments: GmailAttachmentDetails[] = [];
+      if (payload && payload.parts) {
+        await downloadTargetAttachments(gmail, msg.id, payload.parts, downloadedAttachments);
+      }
+      
       emails.push({
         id: msg.id,
         from: fromHeader,
@@ -97,7 +110,8 @@ export async function fetchUnreadEmails(
         date: dateHeader,
         snippet,
         body,
-        attachments
+        attachments,
+        downloadedAttachments
       });
     } catch (err) {
       console.error(`Failed to fetch message details for ID ${msg.id}:`, err);
@@ -105,6 +119,40 @@ export async function fetchUnreadEmails(
   }
 
   return emails;
+}
+
+async function downloadTargetAttachments(
+  gmail: any,
+  messageId: string,
+  parts: any[],
+  results: GmailAttachmentDetails[]
+) {
+  for (const part of parts) {
+    if (part.filename && part.body && part.body.attachmentId) {
+      const mime = part.mimeType || '';
+      if (mime === 'application/pdf' || mime.startsWith('image/')) {
+        try {
+          const res = await gmail.users.messages.attachments.get({
+            userId: 'me',
+            messageId: messageId,
+            id: part.body.attachmentId
+          });
+          if (res.data && res.data.data) {
+            results.push({
+              filename: part.filename,
+              mimeType: mime,
+              data: res.data.data
+            });
+          }
+        } catch (err) {
+          console.error(`Failed to download attachment ${part.filename} (ID: ${part.body.attachmentId}):`, err);
+        }
+      }
+    }
+    if (part.parts) {
+      await downloadTargetAttachments(gmail, messageId, part.parts, results);
+    }
+  }
 }
 
 function extractBody(payload: any): string {
@@ -198,5 +246,115 @@ export async function watchGmailAccount(refreshToken: string, topicName: string)
       topicName: topicName
     }
   });
+  return response.data;
+}
+
+export async function archiveEmail(refreshToken: string, id: string): Promise<void> {
+  const oauth2Client = getOAuth2Client();
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  await gmail.users.messages.batchModify({
+    userId: 'me',
+    requestBody: {
+      ids: [id],
+      removeLabelIds: ['INBOX']
+    }
+  });
+}
+
+export async function replyToEmail(
+  refreshToken: string,
+  originalGmailId: string,
+  replyBody: string
+): Promise<any> {
+  const oauth2Client = getOAuth2Client();
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+  // 1. Fetch metadata of the original email
+  const original = await gmail.users.messages.get({
+    userId: 'me',
+    id: originalGmailId,
+    format: 'metadata',
+    metadataHeaders: ['Message-ID', 'Subject', 'From', 'References']
+  });
+
+  const headers = original.data.payload?.headers || [];
+  const messageIdHeader = headers.find(h => h.name?.toLowerCase() === 'message-id')?.value || '';
+  const subjectHeader = headers.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
+  const fromHeader = headers.find(h => h.name?.toLowerCase() === 'from')?.value || '';
+  const referencesHeader = headers.find(h => h.name?.toLowerCase() === 'references')?.value || '';
+  const threadId = original.data.threadId;
+
+  // Extract email recipient from "From: Name <email>" format
+  let toRecipient = fromHeader;
+  const match = fromHeader.match(/<([^>]+)>/);
+  if (match) {
+    toRecipient = match[1];
+  }
+
+  // 2. Build the raw MIME email
+  const cleanSubject = subjectHeader.toLowerCase().startsWith('re:') ? subjectHeader : `Re: ${subjectHeader}`;
+  const refs = referencesHeader ? `${referencesHeader} ${messageIdHeader}` : messageIdHeader;
+
+  const emailLines = [
+    `To: ${toRecipient}`,
+    `Subject: ${cleanSubject}`,
+    `In-Reply-To: ${messageIdHeader}`,
+    `References: ${refs}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 7bit',
+    '',
+    replyBody
+  ];
+
+  const rawContent = emailLines.join('\r\n');
+  const base64Raw = Buffer.from(rawContent)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+
+  // 3. Send the reply using Gmail API
+  const response = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: {
+      raw: base64Raw,
+      threadId: threadId || undefined
+    }
+  });
+
+  return response.data;
+}
+
+export async function createCalendarEvent(
+  refreshToken: string,
+  eventDetails: { title: string; start: string; end?: string }
+): Promise<any> {
+  const oauth2Client = getOAuth2Client();
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+  // Parse start date, fallback to 1 hour event if end is missing
+  const start = new Date(eventDetails.start);
+  const end = eventDetails.end ? new Date(eventDetails.end) : new Date(start.getTime() + 60 * 60 * 1000);
+
+  const response = await calendar.events.insert({
+    calendarId: 'primary',
+    requestBody: {
+      summary: eventDetails.title,
+      start: {
+        dateTime: start.toISOString(),
+        timeZone: 'UTC'
+      },
+      end: {
+        dateTime: end.toISOString(),
+        timeZone: 'UTC'
+      },
+      description: 'Automatically scheduled by Mail2WhatsApp AI.'
+    }
+  });
+
   return response.data;
 }

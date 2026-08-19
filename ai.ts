@@ -33,7 +33,8 @@ export async function analyzeEmail(
   content: string,
   language = 'English',
   customProvider?: string,
-  customModel?: string
+  customModel?: string,
+  attachments?: { filename: string; mimeType: string; data: string }[]
 ): Promise<LLMResult> {
   const provider = customProvider || process.env.LLM_PROVIDER || 'openrouter';
   const apiKey = process.env.LLM_API_KEY;
@@ -58,6 +59,8 @@ export async function analyzeEmail(
 Strictly analyze the incoming email and return a valid JSON object ONLY.
 Do not output any thinking process, explanations, reasoning, or markdown formatting. Start directly with the opening curly brace "{" and end with "}".
 
+If any attachments (PDFs or Images) are provided as part of the message, analyze their content as well. Use the details inside the attachments (such as costs/totals for invoices, flight/hotel booking details, event schedules, or document content) to categorize, summarize, and prioritize the email.
+
 The JSON structure must be exactly:
 {
   "category": "One of: 'Important' | 'Action Required' | 'Meetings' | 'Recruiters' | 'GitHub' | 'Finance' | 'Shopping' | 'Promotions' | 'Spam' | 'Work' | 'Personal' | 'Education'",
@@ -77,9 +80,14 @@ The JSON structure must be exactly:
   }
 }`;
 
-  const userMessage = `From: ${from}
+  let userMessage = `From: ${from}
 Subject: ${subject}
 Body Content: ${content}`;
+
+  if (attachments && attachments.length > 0) {
+    const filenames = attachments.map(a => a.filename).join(', ');
+    userMessage += `\n[Attachments: ${filenames}]`;
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -102,9 +110,22 @@ Body Content: ${content}`;
           await new Promise(resolve => setTimeout(resolve, 1500));
         }
 
+        const contents: any[] = [userMessage];
+        if (attachments && attachments.length > 0) {
+          for (const att of attachments) {
+            const stdBase64 = att.data.replace(/-/g, '+').replace(/_/g, '/');
+            contents.push({
+              inlineData: {
+                data: stdBase64,
+                mimeType: att.mimeType
+              }
+            });
+          }
+        }
+
         const response = await ai.models.generateContent({
           model: initialModel,
-          contents: userMessage,
+          contents,
           config: {
             systemInstruction: systemPrompt,
             responseMimeType: 'application/json',

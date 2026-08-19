@@ -465,6 +465,38 @@ export async function clearEmails(userId: string) {
   return stmt.run(userId);
 }
 
+export async function getEmailByWhatsAppMessageId(whatsappMessageId: string): Promise<any | null> {
+  const database = await getDb();
+  const stmt = database.prepare('SELECT * FROM emails WHERE whatsapp_message_id = ?');
+  const row = stmt.get(whatsappMessageId) as any;
+  if (!row) return null;
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    gmail_message_id: row.gmail_message_id,
+    from_address: row.from_address,
+    subject: row.subject,
+    content: row.content,
+    summary: row.summary,
+    category: row.category,
+    importance: row.importance,
+    date: row.date,
+    whatsapp_status: row.whatsapp_status,
+    whatsapp_message_id: row.whatsapp_message_id,
+    delivery_error: row.delivery_error,
+    is_read: row.is_read === 1,
+    created_at: row.created_at,
+    attachments: JSON.parse(row.attachments || '[]'),
+    ai_metadata: row.ai_metadata ? JSON.parse(row.ai_metadata) : null
+  };
+}
+
+export async function updateEmailReadStatus(id: string, isRead: boolean) {
+  const database = await getDb();
+  const stmt = database.prepare('UPDATE emails SET is_read = ? WHERE id = ?');
+  return stmt.run(isRead ? 1 : 0, id);
+}
+
 // Logs (Execution Logs) DB Methods
 export async function getLogs(userId: string) {
   const database = await getDb();
