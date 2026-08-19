@@ -127,19 +127,45 @@ export async function sendWhatsAppAlert(
   }
 
   const messageText = buildAlertMessage(emailDetails, aiMetadata);
-
+ 
   const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
-
-  const payload = {
+ 
+  const templateName = process.env.WHATSAPP_TEMPLATE_NAME;
+  const templateLang = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
+ 
+  const payload: any = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to: cleanNumber,
-    type: 'text',
-    text: {
+    to: cleanNumber
+  };
+ 
+  if (templateName) {
+    payload.type = 'template';
+    payload.template = {
+      name: templateName,
+      language: {
+        code: templateLang
+      },
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: emailDetails.from },
+            { type: 'text', text: emailDetails.subject },
+            { type: 'text', text: emailDetails.category },
+            { type: 'text', text: emailDetails.importance },
+            { type: 'text', text: emailDetails.summary }
+          ]
+        }
+      ]
+    };
+  } else {
+    payload.type = 'text';
+    payload.text = {
       preview_url: false,
       body: messageText
-    }
-  };
+    };
+  }
 
   const dispatchMessage = async () => {
     const response = await fetch(url, {
@@ -218,45 +244,79 @@ export async function sendWhatsAppDigest(
   const cleanNumber = normalizeWhatsAppNumber(toNumber);
   if (!cleanNumber) return { status: 'Failed', error: 'Invalid phone number.' };
 
+  const digestTemplate = process.env.WHATSAPP_DIGEST_TEMPLATE_NAME;
+  const digestLang = process.env.WHATSAPP_DIGEST_TEMPLATE_LANG || 'en';
+
   const divider = '━━━━━━━━━━━━━━━━━━━━━';
   const now = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
 
-  let msg = `📊 *Daily Email Digest*\n${divider}\n`;
-  msg += `📅 *${now}*\n\n`;
-  msg += `📬 *Total Emails:* ${stats.total}\n`;
-  msg += `🔴 High Priority: ${stats.high}\n`;
-  msg += `🟡 Medium Priority: ${stats.medium}\n`;
-  msg += `🔵 Low Priority: ${stats.low}\n`;
+  const topSubjectsStr = stats.topSubjects.slice(0, 3).map((s, i) => `${i + 1}. ${s.length > 40 ? s.substring(0, 37) + '...' : s}`).join(', ');
 
-  if (Object.keys(stats.categories).length > 0) {
-    msg += `\n📂 *Categories:*\n`;
-    for (const [cat, count] of Object.entries(stats.categories).slice(0, 5)) {
-      msg += `  • ${cat}: ${count}\n`;
+  const payload: any = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: cleanNumber
+  };
+
+  if (digestTemplate) {
+    payload.type = 'template';
+    payload.template = {
+      name: digestTemplate,
+      language: {
+        code: digestLang
+      },
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: now },
+            { type: 'text', text: stats.total.toString() },
+            { type: 'text', text: stats.high.toString() },
+            { type: 'text', text: stats.medium.toString() },
+            { type: 'text', text: stats.low.toString() },
+            { type: 'text', text: topSubjectsStr || 'None' }
+          ]
+        }
+      ]
+    };
+  } else {
+    let msg = `📊 *Daily Email Digest*\n${divider}\n`;
+    msg += `📅 *${now}*\n\n`;
+    msg += `📬 *Total Emails:* ${stats.total}\n`;
+    msg += `🔴 High Priority: ${stats.high}\n`;
+    msg += `🟡 Medium Priority: ${stats.medium}\n`;
+    msg += `🔵 Low Priority: ${stats.low}\n`;
+
+    if (Object.keys(stats.categories).length > 0) {
+      msg += `\n📂 *Categories:*\n`;
+      for (const [cat, count] of Object.entries(stats.categories).slice(0, 5)) {
+        msg += `  • ${cat}: ${count}\n`;
+      }
     }
-  }
 
-  if (stats.topSubjects.length > 0) {
-    msg += `\n📌 *Top Subjects:*\n`;
-    stats.topSubjects.slice(0, 3).forEach((s, i) => {
-      const truncated = s.length > 50 ? s.substring(0, 47) + '...' : s;
-      msg += `  ${i + 1}. ${truncated}\n`;
-    });
-  }
+    if (stats.topSubjects.length > 0) {
+      msg += `\n📌 *Top Subjects:*\n`;
+      stats.topSubjects.slice(0, 3).forEach((s, i) => {
+        const truncated = s.length > 50 ? s.substring(0, 47) + '...' : s;
+        msg += `  ${i + 1}. ${truncated}\n`;
+      });
+    }
 
-  msg += `\n${divider}\n🤖 _Mail2WhatsApp AI Daily Digest_`;
+    msg += `\n${divider}\n🤖 _Mail2WhatsApp AI Daily Digest_`;
+
+    payload.type = 'text';
+    payload.text = {
+      preview_url: false,
+      body: msg
+    };
+  }
 
   const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: cleanNumber,
-        type: 'text',
-        text: { preview_url: false, body: msg }
-      })
+      body: JSON.stringify(payload)
     });
     const resJson: any = await response.json().catch(() => null);
     if (!response.ok) throw new Error(resJson?.error?.message || `HTTP ${response.status}`);
