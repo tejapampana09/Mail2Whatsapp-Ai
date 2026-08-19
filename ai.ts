@@ -21,11 +21,10 @@ export interface LLMResult {
 }
 
 const OPENROUTER_FALLBACK_MODELS = [
+  'openrouter/free',
   'google/gemma-2-9b-it:free',
   'meta-llama/llama-3-8b-instruct:free',
-  'qwen/qwen-2-7b-instruct:free',
-  'mistralai/mistral-7b-instruct:free',
-  'microsoft/phi-3-medium-128k-instruct:free'
+  'qwen/qwen-2-7b-instruct:free'
 ];
 
 export async function analyzeEmail(
