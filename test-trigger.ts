@@ -2,8 +2,8 @@ import { sendWhatsAppAlert } from './whatsapp.ts';
 import { initDb, getDb } from './db.ts';
 
 async function run() {
-  initDb();
-  const db = getDb();
+  await initDb();
+  const db = await getDb();
   const row = db.prepare('SELECT whatsapp_number FROM settings LIMIT 1').get() as any;
   if (!row || !row.whatsapp_number) {
     console.error('No whatsapp number found in settings table.');
