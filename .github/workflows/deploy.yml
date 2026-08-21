@@ -1,43 +1,62 @@
-name: Deploy to EC2
+name: CI/CD Production Pipeline
 
 on:
   push:
-    branches:
-      - master
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
 
 jobs:
-  deploy:
-    name: SSH Deploy to EC2
+  validate:
+    name: Lint, Test & Build Validation
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v0.1.10
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Typecheck / Lint
+        run: npm run lint
+
+      - name: Execute Test Suite
+        run: npm test --if-present
+
+      - name: Build Frontend & Backend
+        run: npm run build
+
+  deploy:
+    name: Continuous Deployment to AWS EC2
+    needs: validate
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST || '3.80.187.41' }}
+          username: ${{ secrets.EC2_USER || 'ubuntu' }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          timeout: 120s
+          port: 22
           script: |
             set -e
-            echo "🚀 Starting deployment..."
-            cd /home/ubuntu/mail2whatsapp-ai
-
-            echo "📥 Resetting any local changes and pulling latest changes from GitHub..."
-            git reset --hard
-            git pull -4 origin master
-
-            echo "📦 Installing dependencies..."
-            npm install
-
-            echo "🏗️ Building frontend assets..."
+            echo "Starting deployment on production host..."
+            cd /home/ubuntu/mail2whatsapp-ai || cd /home/ubuntu/Mail2Whatsapp-Ai
+            git pull origin main || git pull origin master
+            npm install --production=false
             npm run build
-
-            echo "🔄 Restarting PM2 process..."
-            pm2 restart mail2whatsapp
-
-            echo "✅ Deployment complete!"
-            pm2 status
+            npm run lint
+            pm2 reload mail2whatsapp || pm2 restart mail2whatsapp || npm run start &
+            echo "Deployment successfully executed."

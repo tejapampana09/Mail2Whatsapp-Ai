@@ -1,14 +1,16 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { PubSub } from '@google-cloud/pubsub';
 import { createServer as createViteServer } from 'vite';
 
+import { env } from './config/env.config';
 import logger from './logger.service';
+import { requestIdMiddleware } from './middleware/request-id.middleware';
+import { metricsService } from './services/metrics.service';
+import { initQueues, closeQueues } from './services/queue.service';
 
 import {
   initDb,
@@ -20,12 +22,12 @@ import {
   getAllGoogleTokens,
   saveGoogleAccountToken,
   deleteGoogleAccountToken,
+  updateOAuthAccountStatus,
   getSettings,
   saveSettings,
   getEmails,
   getEmailsSince,
   addEmail,
-  emailExistsByGmailId,
   deleteEmail,
   clearEmails,
   getLogs,
@@ -34,8 +36,11 @@ import {
   getEmailByWhatsAppMessageId,
   updateEmailReadStatus,
   getUserIdByWhatsAppNumber,
-  getLatestEmail
-} from './db.ts';
+  getLatestEmail,
+  createEmailEvent,
+  updateEmailEventStatus,
+  updateSyncState
+} from './db';
 
 import {
   getAuthUrl,
@@ -43,73 +48,88 @@ import {
   getUserInfo,
   fetchUnreadEmails,
   markEmailAsRead,
-  watchGmailAccount,
   archiveEmail,
   replyToEmail,
-  createCalendarEvent
-} from './gmail.ts';
+  createCalendarEvent,
+} from './gmail';
 
 import {
   analyzeEmail,
   getFallbackAnalysis
-} from './ai.ts';
+} from './ai';
 
 import {
   sendWhatsAppAlert,
   sendWhatsAppDigest,
   sendWhatsAppVoiceSummary,
-  checkWhatsAppConfig
-} from './whatsapp.ts';
-
-dotenv.config();
+  checkWhatsAppConfig,
+  startOutboxWorker,
+  stopOutboxWorker
+} from './whatsapp';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const PORT = env.PORT;
+const JWT_SECRET = env.JWT_SECRET;
 
-if (!process.env.JWT_SECRET && process.env.NODE_ENV === 'production') {
-  throw new Error('FATAL: JWT_SECRET environment variable is not defined in production!');
-}
-const JWT_SECRET = process.env.JWT_SECRET || 'default-super-secure-local-jwt-secret-key-123456';
-
-// Initialize Database
+// 1. Initialize Database
 initDb().then(() => {
-  logger.info({ type: 'DB_INIT', description: 'Database initialized successfully.' });
+  logger.info({ type: 'DB_INIT', description: 'Database initialized with WAL mode & enterprise schema.' });
 }).catch((err) => {
   logger.error({ type: 'DB_INIT', description: `Failed to initialize database: ${err.message}` });
 });
 
+// 2. Initialize Queues and Outbox Worker
+initQueues();
+startOutboxWorker();
+
 const app = express();
 
-// Helmet HTTP Security Headers (prevent clickjacking, mime sniffing, XSS, etc.)
+// 3. Request ID & Metrics Middleware
+app.use(requestIdMiddleware);
+
+app.use((_req, res, next) => {
+  const startTime = Date.now();
+  metricsService.increment('http_requests_total');
+  
+  res.on('finish', () => {
+    const duration = Date.now() - startTime;
+    metricsService.recordLatency(duration);
+  });
+  next();
+});
+
+// 4. Helmet Security Headers
 app.use(helmet({
-  contentSecurityPolicy: false // Disable default CSP to prevent blocking loading client-side Vite scripts
+  contentSecurityPolicy: false
 }));
 
-// Secure Whitelisted CORS Configuration
-const allowedOrigins = [
+// 5. Whitelisted CORS Configuration
+const defaultOrigins = [
   'https://whatsapp2mail.duckdns.org',
-  'http://54.162.62.35.nip.io',
   'http://localhost:3000',
   'http://localhost:5173'
 ];
+const customOrigins = env.CORS_ORIGINS ? env.CORS_ORIGINS.split(',').map(s => s.trim()) : [];
+const allowedOrigins = Array.from(new Set([...defaultOrigins, ...customOrigins]));
+
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error('Blocked by CORS policy'));
     }
   },
   credentials: true
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
-// In-Memory Rate Limiter (Security)
-const rateLimitWindowMs = 15 * 60 * 1000; // 15 minutes
-const rateLimitMaxRequests = 500; // Limit each IP to 500 requests per window
+// 6. Global In-Memory Rate Limiter
+const rateLimitWindowMs = 15 * 60 * 1000;
+const rateLimitMaxRequests = 1000;
 const ipRequestCounts = new Map<string, { count: number; resetTime: number }>();
 
 function rateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -125,37 +145,60 @@ function rateLimiter(req: express.Request, res: express.Response, next: express.
   ipRequestCounts.set(ip, record);
   
   if (record.count > rateLimitMaxRequests) {
-    return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+    return res.status(429).json({
+      success: false,
+      error: {
+        code: 'RATE_LIMIT_EXCEEDED',
+        message: 'Too many requests. Please try again later.',
+        requestId: (req as any).requestId
+      }
+    });
   }
   
   next();
 }
 app.use(rateLimiter);
 
+// ----------------------------------------------------
 // JWT Authentication Middleware
+// ----------------------------------------------------
 export interface AuthenticatedRequest extends express.Request {
   user?: {
     id: string;
     email: string;
   };
+  requestId?: string;
 }
 
 function authenticateToken(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers['authorization'];
-  let token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+  let token = authHeader && authHeader.split(' ')[1];
 
-  // Fallback to query parameter for browser redirects (e.g. add-account redirect)
   if (!token && req.query.token) {
     token = req.query.token as string;
   }
 
   if (!token) {
-    return res.status(401).json({ error: 'Session token required. Please log in.' });
+    return res.status(401).json({
+      success: false,
+      error: {
+        code: 'AUTH_REQUIRED',
+        message: 'Session token required. Please log in.',
+        requestId: req.requestId
+      }
+    });
   }
 
   jwt.verify(token, JWT_SECRET, (err, decoded: any) => {
     if (err) {
-      return res.status(403).json({ error: 'Invalid or expired session token.' });
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'INVALID_TOKEN',
+          message: 'Invalid or expired session token.',
+          requestId: req.requestId
+        }
+      });
     }
     req.user = {
       id: decoded.id,
@@ -166,15 +209,80 @@ function authenticateToken(req: AuthenticatedRequest, res: express.Response, nex
 }
 
 // ----------------------------------------------------
+// Production Health Checks & Metrics
+// ----------------------------------------------------
+app.get('/health/live', (_req, res) => {
+  res.json({
+    status: 'OK',
+    service: 'mail2whatsapp-api',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/health/ready', async (_req, res) => {
+  try {
+    const database = await getDb();
+    database.prepare('SELECT 1').get();
+    res.json({
+      status: 'READY',
+      database: 'connected',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    res.status(503).json({
+      status: 'NOT_READY',
+      database: 'disconnected',
+      error: err.message
+    });
+  }
+});
+
+app.get('/health/dependencies', async (_req, res) => {
+  const whatsappOk = checkWhatsAppConfig();
+  const googleOk = !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+  const llmOk = !!(env.LLM_API_KEY && !env.LLM_API_KEY.includes('replace_me'));
+
+  res.json({
+    status: (whatsappOk && googleOk && llmOk) ? 'HEALTHY' : 'DEGRADED',
+    dependencies: {
+      whatsapp: whatsappOk ? 'configured' : 'missing_credentials',
+      googleOAuth: googleOk ? 'configured' : 'missing_credentials',
+      llmProvider: llmOk ? 'configured' : 'missing_key'
+    },
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'OK',
+    uptime: process.uptime(),
+    timestamp: Date.now()
+  });
+});
+
+app.get('/metrics', (req, res) => {
+  const format = req.query.format;
+  if (format === 'json') {
+    res.json(metricsService.getMetricsJSON());
+  } else {
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+    res.send(metricsService.getPrometheusFormat());
+  }
+});
+
+// ----------------------------------------------------
 // Public Authentication / Handshake Endpoints
 // ----------------------------------------------------
-
 app.get('/api/handshake', (_req, res) => {
   res.json({
-    llmConfigured: !!(process.env.LLM_API_KEY && !process.env.LLM_API_KEY.includes('replace_me')),
-    googleConfigured: !!(process.env.GOOGLE_CLIENT_ID && !process.env.GOOGLE_CLIENT_ID.includes('replace_me')),
+    llmConfigured: !!(env.LLM_API_KEY && !env.LLM_API_KEY.includes('replace_me')),
+    googleConfigured: !!(env.GOOGLE_CLIENT_ID && !env.GOOGLE_CLIENT_ID.includes('replace_me')),
     whatsappConfigured: checkWhatsAppConfig(),
-    provider: process.env.LLM_PROVIDER || 'openrouter'
+    provider: env.LLM_PROVIDER
   });
 });
 
@@ -197,21 +305,16 @@ app.get('/api/auth/google/callback', async (req, res) => {
   try {
     const tokens = await exchangeCodeForTokens(code);
     const accessToken = tokens.access_token;
-    if (!accessToken) {
-      throw new Error('Access token was not returned by Google.');
-    }
+    if (!accessToken) throw new Error('Access token was not returned by Google.');
 
     const userInfo = await getUserInfo(accessToken);
-    if (!userInfo.id || !userInfo.email) {
-      throw new Error('Unable to fetch user profile info from Google.');
-    }
+    if (!userInfo.id || !userInfo.email) throw new Error('Unable to fetch user profile info from Google.');
 
     const userId = userInfo.id;
     const userEmail = userInfo.email;
     const userName = userInfo.name || 'Google User';
     const userAvatar = userInfo.picture || '';
 
-    // Upsert User
     await upsertUser({
       id: userId,
       email: userEmail,
@@ -219,7 +322,6 @@ app.get('/api/auth/google/callback', async (req, res) => {
       avatar: userAvatar
     });
 
-    // Save Tokens
     await saveOAuthToken({
       userId,
       provider: 'google',
@@ -230,83 +332,34 @@ app.get('/api/auth/google/callback', async (req, res) => {
       token_type: tokens.token_type || undefined
     });
 
-    // Save Initial Settings if not present
     const existingSettings = await getSettings(userId);
     if (!existingSettings) {
-      const defaultModel = process.env.LLM_MODEL || (
-        process.env.LLM_PROVIDER === 'openai' ? 'gpt-4o-mini' :
-        (process.env.LLM_PROVIDER === 'google' || process.env.LLM_PROVIDER === 'gemini') ? 'gemini-1.5-flash' :
-        'openrouter/free'
-      );
       await saveSettings(userId, {
-        ai_model: defaultModel,
-        ai_provider: process.env.LLM_PROVIDER || 'openrouter',
+        ai_model: env.LLM_MODEL,
+        ai_provider: env.LLM_PROVIDER,
         language: 'English',
         gmail_poll_interval: 5,
         importance_threshold: 'Medium',
         ignored_categories: ['Spam', 'Promotion'],
         whatsapp_notifications_enabled: true,
-        whatsapp_number: '+919542696946',
+        whatsapp_number: '',
         analyze_limit: 10
       });
     }
 
-    // Generate local JWT Session token
     const jwtToken = jwt.sign(
       { id: userId, email: userEmail },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    // Write log
     await addLog(userId, 'INFO', 'GOOGLE_OAUTH', `User "${userEmail}" connected successfully via Google OAuth.`);
-
-    // Set up Gmail push notifications (watch)
-    if (tokens.refresh_token) {
-      const topicName = process.env.GOOGLE_PUB_SUB_TOPIC;
-      if (topicName) {
-        try {
-          await watchGmailAccount(tokens.refresh_token, topicName);
-          await addLog(userId, 'INFO', 'GMAIL_WATCH', `Successfully set up Gmail watch for ${userEmail}.`);
-
-          // Ensure Pub/Sub topic and subscription are configured
-          const pubsub = new PubSub();
-          const topic = pubsub.topic(topicName);
-          const [topicExists] = await topic.exists();
-          if (!topicExists) {
-            await topic.create();
-            console.log(`[Pub/Sub] Created Pub/Sub topic: ${topicName}`);
-          }
-
-          const subscriptionName = process.env.GOOGLE_PUB_SUB_SUBSCRIPTION || 'gmail-push-subscription';
-          const subscription = topic.subscription(subscriptionName);
-          const [subExists] = await subscription.exists();
-          if (!subExists) {
-            const webhookUrl = process.env.WEBHOOK_URL;
-            if (!webhookUrl) {
-              throw new Error('WEBHOOK_URL environment variable not set for Pub/Sub push.');
-            }
-            await subscription.create({
-              pushEndpoint: webhookUrl,
-              ackDeadlineSeconds: 60,
-            });
-            console.log(`[Pub/Sub] Created push subscription: ${subscriptionName} -> ${webhookUrl}`);
-          }
-        } catch (watchErr: any) {
-          console.error('Failed to set up Gmail watch:', watchErr);
-          await addLog(userId, 'ERROR', 'GMAIL_WATCH', `Failed to set up Gmail watch for ${userEmail}: ${watchErr.message}`);
-        }
-      } else {
-        await addLog(userId, 'WARNING', 'GMAIL_WATCH', 'Gmail watch setup skipped: GOOGLE_PUB_SUB_TOPIC not configured.');
-      }
-    }
 
     // Check if this is an "add additional account" flow
     const state = req.query.state as string || '';
     if (state.startsWith('add_account:')) {
       const [, existingUserId, existingJwt] = state.split(':');
       if (existingUserId) {
-        // Save as additional Gmail account token for the existing user
         await saveGoogleAccountToken({
           userId: existingUserId,
           provider: 'google',
@@ -318,53 +371,10 @@ app.get('/api/auth/google/callback', async (req, res) => {
           token_type: tokens.token_type || undefined
         });
         await addLog(existingUserId, 'INFO', 'GOOGLE_OAUTH', `Additional Gmail account "${userEmail}" connected.`);
-
-        // Set up Gmail push notifications for the additional account
-        if (tokens.refresh_token) {
-          const topicName = process.env.GOOGLE_PUB_SUB_TOPIC;
-          if (topicName) {
-            try {
-              await watchGmailAccount(tokens.refresh_token, topicName);
-              await addLog(existingUserId, 'INFO', 'GMAIL_WATCH', `Successfully set up Gmail watch for ${userEmail}.`);
-
-              // Ensure Pub/Sub topic and subscription are configured
-              const pubsub = new PubSub();
-              const topic = pubsub.topic(topicName);
-              const [topicExists] = await topic.exists();
-              if (!topicExists) {
-                await topic.create();
-                console.log(`[Pub/Sub] Created Pub/Sub topic: ${topicName}`);
-              }
-
-              const subscriptionName = process.env.GOOGLE_PUB_SUB_SUBSCRIPTION || 'gmail-push-subscription';
-              const subscription = topic.subscription(subscriptionName);
-              const [subExists] = await subscription.exists();
-              if (!subExists) {
-                const webhookUrl = process.env.WEBHOOK_URL;
-                if (!webhookUrl) {
-                  throw new Error('WEBHOOK_URL environment variable not set for Pub/Sub push.');
-                }
-                await subscription.create({
-                  pushEndpoint: webhookUrl,
-                  ackDeadlineSeconds: 60,
-                });
-                console.log(`[Pub/Sub] Created push subscription: ${subscriptionName} -> ${webhookUrl}`);
-              }
-            } catch (watchErr: any) {
-              console.error('Failed to set up Gmail watch for additional account:', watchErr);
-              await addLog(existingUserId, 'ERROR', 'GMAIL_WATCH', `Failed to set up watch for ${userEmail}: ${watchErr.message}`);
-            }
-          } else {
-            await addLog(existingUserId, 'WARNING', 'GMAIL_WATCH', `Watch setup skipped for ${userEmail}: GOOGLE_PUB_SUB_TOPIC not configured.`);
-          }
-        }
-
-        // Return to dashboard without changing JWT
         return res.redirect(`/?token=${existingJwt || ''}&account_added=true`);
       }
     }
 
-    // Redirect to frontend dashboard with token
     res.redirect(`/?token=${jwtToken}`);
   } catch (err: any) {
     console.error('Google OAuth callback failed:', err);
@@ -372,31 +382,16 @@ app.get('/api/auth/google/callback', async (req, res) => {
   }
 });
 
-// Health check endpoint
-app.get('/api/health', (_req, res) => {
-  res.json({
-    status: 'healthy',
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString()
-  });
-});
-
-// ----------------------------------------------------
-// Gmail Multi-Account OAuth — Connect Additional Account
-// ----------------------------------------------------
+// Multi-Account OAuth Linking
 app.get('/api/auth/google/add-account', authenticateToken, (req: AuthenticatedRequest, res) => {
   try {
-    // Pass current user's JWT as state so callback knows to ADD, not replace
     const authUrl = getAuthUrl();
-    // Append state to tell callback this is an add-account flow
     const urlWithState = authUrl + `&state=add_account:${req.user!.id}:${req.query.token}`;
     res.redirect(urlWithState);
   } catch (err: any) {
     res.status(500).json({ error: 'Cannot generate Google OAuth URL.' });
   }
 });
-
-
 
 app.get('/api/auth/me', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
@@ -407,7 +402,6 @@ app.get('/api/auth/me', authenticateToken, async (req: AuthenticatedRequest, res
       avatar: ''
     });
     
-    // Check if Google is connected by seeing if we have a valid token
     const token = await getOAuthToken(req.user!.id);
     const googleConnected = !!token;
     
@@ -420,7 +414,6 @@ app.get('/api/auth/me', authenticateToken, async (req: AuthenticatedRequest, res
   }
 });
 
-// List all connected Gmail accounts for current user
 app.get('/api/gmail/accounts', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const accounts = await getAllGoogleTokens(req.user!.id);
@@ -428,6 +421,10 @@ app.get('/api/gmail/accounts', authenticateToken, async (req: AuthenticatedReque
       id: a.id,
       email: a.gmailEmail || req.user!.email,
       connectedAt: a.createdAt,
+      status: a.status,
+      lastSyncAt: a.lastSyncAt,
+      lastSuccessfulSyncAt: a.lastSuccessfulSyncAt,
+      lastError: a.lastError,
       isPrimary: !a.gmailEmail
     })));
   } catch (err: any) {
@@ -435,7 +432,6 @@ app.get('/api/gmail/accounts', authenticateToken, async (req: AuthenticatedReque
   }
 });
 
-// Remove a specific Gmail account connection
 app.delete('/api/gmail/accounts/:tokenId', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const { tokenId } = req.params;
@@ -547,7 +543,7 @@ app.post('/api/settings', authenticateToken, async (req: AuthenticatedRequest, r
     const googleConnected = !!token;
     const whatsappConnected = checkWhatsAppConfig() && !!updated.whatsapp_number;
 
-    await addLog(req.user!.id, 'INFO', 'CONFIG_UPDATE', 'System preferences and AI classification parameters updated.');
+    await addLog(req.user!.id, 'INFO', 'CONFIG_UPDATE', 'System preferences and AI parameters updated.');
 
     res.json({
       success: true,
@@ -576,14 +572,9 @@ app.post('/api/reset', authenticateToken, async (req: AuthenticatedRequest, res)
     await clearEmails(userId);
     await clearLogs(userId);
     await deleteOAuthToken(userId);
-    const defaultModel = process.env.LLM_MODEL || (
-      process.env.LLM_PROVIDER === 'openai' ? 'gpt-4o-mini' :
-      (process.env.LLM_PROVIDER === 'google' || process.env.LLM_PROVIDER === 'gemini') ? 'gemini-1.5-flash' :
-      'openrouter/free'
-    );
     await saveSettings(userId, {
-      ai_model: defaultModel,
-      ai_provider: process.env.LLM_PROVIDER || 'openrouter',
+      ai_model: env.LLM_MODEL,
+      ai_provider: env.LLM_PROVIDER,
       language: 'English',
       gmail_poll_interval: 5,
       importance_threshold: 'Medium',
@@ -600,7 +591,6 @@ app.post('/api/reset', authenticateToken, async (req: AuthenticatedRequest, res)
   }
 });
 
-// Inbox synchronization route
 app.post('/api/sync', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const userId = req.user!.id;
@@ -611,36 +601,43 @@ app.post('/api/sync', authenticateToken, async (req: AuthenticatedRequest, res) 
       skipped: syncCount.skipped
     });
   } catch (err: any) {
-    console.error('Manual sync triggered error:', err);
+    console.error('Manual sync error:', err);
     res.status(500).json({ error: err.message || 'Sync failed.' });
   }
 });
 
-// In-memory lock to prevent concurrent sync operations for the same user
+// ----------------------------------------------------
+// Core Inbox Sync Engine with Idempotent Outbox
+// ----------------------------------------------------
 const syncingUsers = new Set<string>();
 
-// ----------------------------------------------------
-// Inbox Core Synchronization Process
-// ----------------------------------------------------
-
-async function runSyncForUser(userId: string): Promise<{ added: number; skipped: number }> {
+export async function runSyncForUser(userId: string): Promise<{ added: number; skipped: number }> {
   if (syncingUsers.has(userId)) {
-    console.log(`[Sync] Sync already in progress for user ${userId}. Skipping.`);
+    console.log(`[Sync] Sync already active for user ${userId}. Skipping.`);
     return { added: 0, skipped: 0 };
   }
 
   syncingUsers.add(userId);
 
   try {
-    await addLog(userId, 'INFO', 'GMAIL_POLL', 'Querying Gmail API check for new unread messages...');
+    await addLog(userId, 'INFO', 'GMAIL_POLL', 'Querying Gmail API for unread inbox messages...');
+    metricsService.increment('gmail_sync_total');
 
-    // Support multiple connected Gmail accounts
-    const allTokens = await getAllGoogleTokens(userId);
-    // Also check legacy single-token row (gmail_email may be null for old rows)
+    let allTokens = await getAllGoogleTokens(userId);
     if (allTokens.length === 0) {
       const legacyToken = await getOAuthToken(userId);
       if (legacyToken?.refresh_token) {
-        allTokens.push({ id: legacyToken.id, gmailEmail: null, refreshToken: legacyToken.refresh_token, accessToken: legacyToken.access_token, createdAt: legacyToken.created_at });
+        allTokens.push({
+          id: legacyToken.id,
+          gmailEmail: null,
+          refreshToken: legacyToken.refresh_token,
+          accessToken: legacyToken.access_token,
+          status: legacyToken.status || 'ACTIVE',
+          lastSyncAt: legacyToken.last_sync_at,
+          lastSuccessfulSyncAt: legacyToken.last_successful_sync_at,
+          lastError: legacyToken.last_error,
+          createdAt: legacyToken.created_at
+        });
       }
     }
 
@@ -650,68 +647,69 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
     }
 
     const settings = await getSettings(userId);
-    if (!settings) {
-      throw new Error('User settings missing. Reset application settings.');
-    }
+    if (!settings) throw new Error('User settings missing.');
 
     let added = 0;
     let skipped = 0;
-    const processedGmailMessageIds = new Set<string>();
 
-    // Loop over each connected Gmail account and fetch emails
     for (const accountToken of allTokens) {
       if (!accountToken.refreshToken) continue;
-      const emailsList = await fetchUnreadEmails(accountToken.refreshToken, settings.analyze_limit);
-      const accountLabel = accountToken.gmailEmail ? ` [${accountToken.gmailEmail}]` : '';
-      if (emailsList.length > 0) {
-        await addLog(userId, 'INFO', 'GMAIL_POLL', `Fetched ${emailsList.length} unread email(s) from account${accountLabel}.`);
+
+      let emailsList: any[] = [];
+      try {
+        emailsList = await fetchUnreadEmails(accountToken.refreshToken, settings.analyze_limit);
+        await updateSyncState({
+          userId,
+          gmailAccountId: accountToken.id,
+          status: 'IDLE',
+          isSuccess: true
+        });
+      } catch (fetchErr: any) {
+        metricsService.increment('gmail_sync_failures');
+        if (fetchErr.message && (fetchErr.message.includes('invalid_grant') || fetchErr.status === 401)) {
+          await updateOAuthAccountStatus(accountToken.id, 'REAUTH_REQUIRED', fetchErr.message);
+          await addLog(userId, 'ERROR', 'GMAIL_AUTH', `Gmail token expired for account. Please reconnect in Settings.`);
+        } else {
+          await updateSyncState({
+            userId,
+            gmailAccountId: accountToken.id,
+            status: 'ERROR',
+            error: fetchErr.message,
+            isSuccess: false
+          });
+        }
+        continue;
       }
 
       for (const rawEmail of emailsList) {
-        // Skip if email from another connected account has already been processed in this sync run
-        if (rawEmail.id && processedGmailMessageIds.has(rawEmail.id)) {
+        if (!rawEmail.id) continue;
+
+        // 1. Persist Event Idempotently
+        const { id: eventId, isDuplicate } = await createEmailEvent({
+          userId,
+          gmailAccountId: accountToken.id,
+          gmailMessageId: rawEmail.id,
+          threadId: rawEmail.threadId,
+          from: rawEmail.from,
+          subject: rawEmail.subject,
+          snippet: rawEmail.snippet,
+          content: rawEmail.body || rawEmail.snippet,
+          attachments: rawEmail.attachments
+        });
+
+        if (isDuplicate) {
           skipped++;
           continue;
         }
 
-        // Skip already-processed emails (duplicate guard by gmail_message_id)
-        if (rawEmail.id) {
-          const alreadyExists = await emailExistsByGmailId(userId, rawEmail.id);
-          if (alreadyExists) {
-            skipped++;
-            continue;
-          }
-        }
-
-        // Add to processed list for this run
-        if (rawEmail.id) {
-          processedGmailMessageIds.add(rawEmail.id);
-        }
-
+        await updateEmailEventStatus(eventId, 'AI_PROCESSING');
         await addLog(userId, 'INFO', 'AI_ANALYSIS', `Analyzing incoming message from "${rawEmail.from}"...`);
+        metricsService.increment('ai_requests_total');
 
-        // Save to DB IMMEDIATELY to prevent re-processing even if AI or WhatsApp fails
-        const emailRecordId = await addEmail(userId, {
-          gmail_message_id: rawEmail.id,
-          from: rawEmail.from,
-          subject: rawEmail.subject,
-          content: rawEmail.body || rawEmail.snippet,
-          summary: rawEmail.snippet || '(Processing...)',
-          category: 'Work',
-          importance: 'Medium',
-          date: rawEmail.date,
-          whatsapp_status: 'Pending',
-          is_read: false,
-          attachments: rawEmail.attachments
-        });
-
-        // AI Analysis (with rule-based fallback)
-        let category = 'Work';
-        let importance: 'High' | 'Medium' | 'Low' = 'Medium';
-        let summary = rawEmail.snippet || '(No Content)';
-        let aiMetadata: any = null;
+        // 2. Perform AI Triage
+        let analysis: any = null;
         try {
-          const analysis = await analyzeEmail(
+          analysis = await analyzeEmail(
             rawEmail.from,
             rawEmail.subject,
             rawEmail.body || rawEmail.snippet,
@@ -720,105 +718,107 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
             settings.ai_model,
             rawEmail.downloadedAttachments
           );
-          category = analysis.category;
-          importance = analysis.importance;
-          summary = analysis.summary;
-          aiMetadata = analysis.aiMetadata || null;
         } catch (err: any) {
-          console.error(`AI analysis failed for email ${rawEmail.id}:`, err);
-          await addLog(userId, 'WARNING', 'AI_FAIL', `LLM analysis failed: ${err.message}. Running rule fallback parser.`);
-          const fallback = getFallbackAnalysis(rawEmail.from, rawEmail.subject, rawEmail.body || rawEmail.snippet);
-          category = fallback.category;
-          importance = fallback.importance;
-          summary = fallback.summary;
-          aiMetadata = fallback.aiMetadata || null;
+          metricsService.increment('ai_failures_total');
+          await addLog(userId, 'WARNING', 'AI_FAIL', `LLM triage failed: ${err.message}. Running rule fallback.`);
+          analysis = getFallbackAnalysis(rawEmail.from, rawEmail.subject, rawEmail.body || rawEmail.snippet);
         }
 
-        // Google Calendar Auto-Scheduling (Feature 5)
-        if (aiMetadata && aiMetadata.calendarEvent) {
-          const event = aiMetadata.calendarEvent;
-          if (event.title && event.start) {
-            try {
-              await addLog(userId, 'INFO', 'CALENDAR_SYNC', `Detected meeting/event in email: "${event.title}". Auto-scheduling to Google Calendar...`);
-              await createCalendarEvent(accountToken.refreshToken, {
-                title: event.title,
-                start: event.start,
-                end: event.end
-              });
-              await addLog(userId, 'INFO', 'CALENDAR_SYNC', `Successfully scheduled Google Calendar event: "${event.title}" on ${event.start}.`);
-              
-              if (settings.whatsapp_notifications_enabled && settings.whatsapp_number) {
-                const calMsg = `📅 *Calendar Auto-Schedule*\n━━━━━━━━━━━━━━━━━━━━━\nEvent: *${event.title}*\nTime: ${new Date(event.start).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })}\n\n🤖 _Scheduled via Mail2WhatsApp AI_`;
-                await sendWhatsAppAlert(settings.whatsapp_number, {
-                  from: 'Google Calendar Daemon',
-                  subject: `Scheduled Event: ${event.title}`,
-                  category: 'Meetings',
-                  importance: 'Medium',
-                  summary: calMsg
-                });
-              }
-            } catch (calErr: any) {
-              console.error(`Failed to auto-schedule Google Calendar event:`, calErr);
-              await addLog(userId, 'ERROR', 'CALENDAR_SYNC', `Failed to schedule event: ${calErr.message}`);
-            }
+        const category = analysis.category;
+        const importance = analysis.importance;
+        const summary = analysis.summary;
+        const aiMetadata = analysis.aiMetadata || null;
+
+        // 3. Calendar Auto-Scheduling
+        if (aiMetadata && aiMetadata.calendarEvent && aiMetadata.calendarEvent.title && aiMetadata.calendarEvent.start) {
+          try {
+            await createCalendarEvent(accountToken.refreshToken, {
+              title: aiMetadata.calendarEvent.title,
+              start: aiMetadata.calendarEvent.start,
+              end: aiMetadata.calendarEvent.end
+            });
+            await addLog(userId, 'INFO', 'CALENDAR_SYNC', `Scheduled calendar event: "${aiMetadata.calendarEvent.title}".`);
+          } catch (calErr: any) {
+            console.error('Calendar sync error:', calErr.message);
           }
         }
- 
-        // Skip if category is ignored
+
+        // 4. Filter Ignored Categories
         if (settings.ignored_categories.includes(category)) {
+          await updateEmailEventStatus(eventId, 'IGNORED');
           await addLog(userId, 'WARNING', 'OMIT_FILTER', `Omitted message from "${rawEmail.from}" (category "${category}" is ignored).`);
           try { await markEmailAsRead(accountToken.refreshToken, rawEmail.id); } catch (_) {}
           skipped++;
           continue;
         }
 
-        // WhatsApp Push Alert
-        let whatsappStatus = 'Disabled';
+        // 5. WhatsApp Notification Dispatch
+        let whatsappStatus: 'Sent' | 'Failed' | 'Disabled' = 'Disabled';
         let whatsappMsgId: string | undefined = undefined;
         let deliveryErr: string | undefined = undefined;
+
         const importanceThresholds: Record<string, number> = { Low: 1, Medium: 2, High: 3 };
         const thresholdVal = importanceThresholds[settings.importance_threshold] || 2;
         const emailImportanceVal = importanceThresholds[importance] || 2;
+
         if (settings.whatsapp_notifications_enabled && emailImportanceVal >= thresholdVal && settings.whatsapp_number) {
           try {
-            await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `Urgent alert triggered. Routing alert summary to WhatsApp number ${settings.whatsapp_number}...`);
-            const pushResult = await sendWhatsAppAlert(settings.whatsapp_number, { from: rawEmail.from, subject: rawEmail.subject, category, importance, summary }, aiMetadata);
+            await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `Urgent alert triggered. Routing alert summary to WhatsApp ${settings.whatsapp_number}...`);
+            const pushResult = await sendWhatsAppAlert(
+              settings.whatsapp_number,
+              { from: rawEmail.from, subject: rawEmail.subject, category, importance, summary },
+              aiMetadata,
+              { userId, emailEventId: eventId }
+            );
+
             whatsappStatus = pushResult.status;
             whatsappMsgId = pushResult.messageId;
             deliveryErr = pushResult.error;
+
             if (pushResult.status === 'Sent') {
-              await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `WhatsApp notification dispatched successfully (ID: ${pushResult.messageId}).`);
-              // Send voice summary for High priority emails if enabled
-              if (importance === 'High' && process.env.WHATSAPP_VOICE_ENABLED === 'true') {
-                const voiceText = `Urgent email. From ${rawEmail.from.split('<')[0].trim()}. Subject: ${rawEmail.subject}. Summary: ${summary}`;
-                sendWhatsAppVoiceSummary(settings.whatsapp_number, voiceText).then(vr => {
-                  if (vr.status === 'Sent') console.log('[Voice] Voice summary sent.');
-                  else console.warn('[Voice] Voice summary failed:', vr.error);
-                });
+              metricsService.increment('whatsapp_sent_total');
+              await addLog(userId, 'INFO', 'WHATSAPP_PUSH', `WhatsApp alert dispatched (ID: ${pushResult.messageId}).`);
+
+              if (importance === 'High' && env.WHATSAPP_VOICE_ENABLED === 'true') {
+                const voiceText = `Urgent email from ${rawEmail.from.split('<')[0].trim()}. Subject: ${rawEmail.subject}. Summary: ${summary}`;
+                sendWhatsAppVoiceSummary(settings.whatsapp_number, voiceText).catch(() => {});
               }
             } else {
-              await addLog(userId, 'ERROR', 'WHATSAPP_PUSH', `WhatsApp notification delivery failed: ${pushResult.error}`);
+              metricsService.increment('whatsapp_failed_total');
+              await addLog(userId, 'ERROR', 'WHATSAPP_PUSH', `WhatsApp delivery queued in Outbox: ${pushResult.error}`);
             }
           } catch (waErr: any) {
+            metricsService.increment('whatsapp_failed_total');
             whatsappStatus = 'Failed';
             deliveryErr = waErr.message || 'WhatsApp routing exception';
-            await addLog(userId, 'ERROR', 'WHATSAPP_PUSH', `WhatsApp routing system failed: ${deliveryErr}`);
           }
         }
 
-        // Update DB record with final analysis results
-        const db = await getDb();
-        db.prepare(
-          `UPDATE emails SET category=?, importance=?, summary=?, whatsapp_status=?, whatsapp_message_id=?, delivery_error=?, ai_metadata=? WHERE id=?`
-        ).run(category, importance, summary, whatsappStatus, whatsappMsgId || null, deliveryErr || null, aiMetadata ? JSON.stringify(aiMetadata) : null, emailRecordId);
+        // 6. Record to Summary History Table (For UI)
+        await addEmail(userId, {
+          gmail_message_id: rawEmail.id,
+          from: rawEmail.from,
+          subject: rawEmail.subject,
+          content: rawEmail.body || rawEmail.snippet,
+          summary,
+          category,
+          importance,
+          date: rawEmail.date,
+          whatsapp_status: whatsappStatus,
+          whatsapp_message_id: whatsappMsgId,
+          delivery_error: deliveryErr,
+          is_read: false,
+          attachments: rawEmail.attachments,
+          ai_metadata: aiMetadata
+        });
 
-        // Mark as read in Gmail
+        await updateEmailEventStatus(eventId, 'PROCESSED');
+        metricsService.increment('emails_processed_total');
+
         try { await markEmailAsRead(accountToken.refreshToken, rawEmail.id); } catch (_) {}
-
-        await addLog(userId, 'INFO', 'ROUTER_MATCH', `Email synced & logged under [Category: ${category} | Priority: ${importance}].`);
         added++;
-      } // end for rawEmail
-    } // end for accountToken
+      }
+    }
 
     await addLog(userId, 'INFO', 'GMAIL_POLL', `Sync complete. ${added} emails added, ${skipped} skipped.`);
     return { added, skipped };
@@ -830,18 +830,14 @@ async function runSyncForUser(userId: string): Promise<{ added: number; skipped:
 // ----------------------------------------------------
 // Background Sync Daemon
 // ----------------------------------------------------
-
-// In-memory per-user last sync timestamp to prevent runaway loops
 const lastSyncTime = new Map<string, number>();
 
-async function startSyncDaemon() {
-  console.log('Background Sync Daemon activated.');
-  
-  // Check every 60 seconds
+function startSyncDaemon() {
+  console.log('Background Gmail Sync Daemon activated.');
   setInterval(async () => {
     try {
-      const database = await initDb();
-      const tokens = database.prepare("SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = 'google'").all();
+      const database = await getDb();
+      const tokens = database.prepare("SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = 'google' AND status = 'ACTIVE'").all();
       
       for (const t of tokens as any[]) {
         const userId = (t as any).user_id;
@@ -853,27 +849,25 @@ async function startSyncDaemon() {
         const elapsed = Date.now() - lastSync;
 
         if (elapsed >= pollIntervalMs) {
-          console.log(`[Daemon] Triggering background sync for user ${userId}...`);
-          lastSyncTime.set(userId, Date.now()); // Set BEFORE running to prevent concurrent triggers
+          lastSyncTime.set(userId, Date.now());
           runSyncForUser(userId).catch((err) => {
-            console.error(`[Daemon] Sync failed for user ${userId}:`, err);
+            console.error(`[Daemon] Sync failed for user ${userId}:`, err.message);
           });
         }
       }
-    } catch (daemonErr) {
-      console.error('[Daemon] Error in background sync interval loop:', daemonErr);
+    } catch (daemonErr: any) {
+      console.error('[Daemon] Error in background sync interval loop:', daemonErr.message);
     }
   }, 60 * 1000);
 }
 
 startSyncDaemon();
 
-
 // ----------------------------------------------------
-// Daily Digest Scheduler (Every morning at 8:00 AM IST)
+// Daily Digest Scheduler
 // ----------------------------------------------------
-async function startDailyDigestScheduler() {
-  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // IST = UTC+5:30
+function startDailyDigestScheduler() {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
   function msUntilNextDigest(): number {
     const nowUTC = Date.now();
@@ -887,11 +881,11 @@ async function startDailyDigestScheduler() {
   const scheduleDigest = async () => {
     try {
       const database = await getDb();
-      const tokens = database.prepare('SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = ?').all('google');
+      const tokens = database.prepare("SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = 'google'").all();
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
       for (const t of tokens as any[]) {
-        const userId = t.user_id;
+        const userId = (t as any).user_id;
         const settings = await getSettings(userId);
         if (!settings?.whatsapp_notifications_enabled || !settings?.whatsapp_number) continue;
 
@@ -910,44 +904,35 @@ async function startDailyDigestScheduler() {
           topSubjects: emails.filter(e => e.importance === 'High').slice(0, 3).map(e => e.subject)
         };
 
-        console.log(`[Digest] Sending daily digest to user ${userId} with ${stats.total} emails...`);
         const result = await sendWhatsAppDigest(settings.whatsapp_number, stats);
         if (result.status === 'Sent') {
           await addLog(userId, 'INFO', 'DAILY_DIGEST', `Daily digest sent: ${stats.total} emails, ${stats.high} urgent.`);
-        } else {
-          await addLog(userId, 'WARNING', 'DAILY_DIGEST', `Daily digest failed: ${result.error}`);
         }
       }
     } catch (err: any) {
       console.error('[Digest] Daily digest failed:', err.message);
     }
-
-    // Schedule next digest
     setTimeout(scheduleDigest, msUntilNextDigest());
   };
 
   const delayMs = msUntilNextDigest();
-  console.log(`[Digest] Daily digest scheduled. Next trigger in ${Math.round(delayMs / 60000)} minutes.`);
   setTimeout(scheduleDigest, delayMs);
 }
 
 startDailyDigestScheduler();
 
 // ----------------------------------------------------
-// WhatsApp Webhook (Two-Way Interactive Replies)
+// Webhooks: WhatsApp & Gmail Pub/Sub
 // ----------------------------------------------------
 app.get('/webhook/whatsapp', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || 'mail2whatsapp_verify_token';
-
-  if (mode === 'subscribe' && token === verifyToken) {
+  if (mode === 'subscribe' && token === env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
     logger.info({ type: 'WEBHOOK_VERIFY', description: 'WhatsApp webhook verified successfully.' });
     res.status(200).send(challenge);
   } else {
-    logger.warn({ type: 'WEBHOOK_VERIFY_FAILED', description: 'WhatsApp webhook verification token mismatch.' });
     res.sendStatus(403);
   }
 });
@@ -955,114 +940,62 @@ app.get('/webhook/whatsapp', (req, res) => {
 app.post('/webhook/whatsapp', async (req, res) => {
   try {
     const body = req.body;
-    
-    // Check if it's a WhatsApp message event
-    if (body.object !== 'whatsapp_business_account') {
-      return res.sendStatus(404);
-    }
+    if (body.object !== 'whatsapp_business_account') return res.sendStatus(404);
 
     const change = body.entry?.[0]?.changes?.[0]?.value;
     if (!change || !change.messages || change.messages.length === 0) {
-      return res.status(200).send('EVENT_RECEIVED'); // Not a message event
-    }
-
-    const message = change.messages[0];
-    const fromNumber = message.from; // Sender's phone number
-    const msgText = message.text?.body?.trim();
-    const context = message.context; // Contains replied message details (context.id)
-
-    if (!msgText) {
       return res.status(200).send('EVENT_RECEIVED');
     }
 
-    console.log(`[WhatsApp Webhook] Received message from ${fromNumber}: "${msgText}"`);
+    const message = change.messages[0];
+    const fromNumber = message.from;
+    const msgText = message.text?.body?.trim();
+    const context = message.context;
 
-    // Resolve the target email using context reply OR fallback to user's latest email alert
+    if (!msgText) return res.status(200).send('EVENT_RECEIVED');
+
     let emailRow: any = null;
- 
     if (context && context.id) {
       emailRow = await getEmailByWhatsAppMessageId(context.id);
     } else {
       const cleanMsg = msgText.toLowerCase();
       const isCommand = msgText.startsWith('/reply ') || cleanMsg === '/read' || cleanMsg === '/archive' || cleanMsg === '/summary';
- 
       if (isCommand) {
         const userId = await getUserIdByWhatsAppNumber(fromNumber);
-        if (userId) {
-          emailRow = await getLatestEmail(userId);
-          if (emailRow) {
-            console.log(`[WhatsApp Webhook] No context message ID, falling back to latest email for user ${userId}: ${emailRow.gmail_message_id}`);
-          }
-        }
+        if (userId) emailRow = await getLatestEmail(userId);
       }
     }
- 
-    if (!emailRow) {
-      if (msgText.toLowerCase() === 'hi' || msgText.toLowerCase() === 'help') {
-        const token = process.env.WHATSAPP_ACCESS_TOKEN;
-        const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-        if (token && phoneId) {
-          const cleanNumber = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
-          const instruction = `🤖 *Mail2WhatsApp AI Assistant*\n\nReply to any email alert with:\n• */reply <your message>* - Reply to the sender\n• */read* - Mark email as read\n• */archive* - Archive the email\n• */summary* - Get detailed email summary\n\n_(Note: If you don't use the reply feature, commands will automatically apply to your latest email alert)._`;
-          await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              messaging_product: 'whatsapp',
-              recipient_type: 'individual',
-              to: cleanNumber,
-              type: 'text',
-              text: { preview_url: false, body: instruction }
-            })
-          });
-        }
-      } else {
-        console.warn(`[WhatsApp Webhook] Could not resolve context or find target email for reply.`);
-      }
-      return res.status(200).send('EVENT_RECEIVED');
-    }
- 
-    // Retrieve user credentials
+
+    if (!emailRow) return res.status(200).send('EVENT_RECEIVED');
+
     const userId = emailRow.user_id;
     const tokenRow = await getOAuthToken(userId, 'google');
-    if (!tokenRow || !tokenRow.refresh_token) {
-      console.error(`[WhatsApp Webhook] No Google credentials found for user: ${userId}`);
-      return res.status(200).send('EVENT_RECEIVED');
-    }
- 
+    if (!tokenRow || !tokenRow.refresh_token) return res.status(200).send('EVENT_RECEIVED');
+
     const decryptedRefreshToken = tokenRow.refresh_token;
-
-    // Handle commands
     const cleanMsg = msgText.toLowerCase();
-    const token = process.env.WHATSAPP_ACCESS_TOKEN;
-    const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const token = env.WHATSAPP_ACCESS_TOKEN;
+    const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
     const cleanNumber = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
-
     let replyStatus = '';
 
     if (msgText.startsWith('/reply ')) {
       const replyContent = msgText.substring(7).trim();
-      if (!replyContent) {
-        replyStatus = '⚠️ Reply message cannot be empty.';
-      } else {
-        console.log(`[WhatsApp Webhook] Replying to email ${emailRow.gmail_message_id} with: "${replyContent}"`);
+      if (replyContent) {
         await replyToEmail(decryptedRefreshToken, emailRow.gmail_message_id, replyContent);
         replyStatus = `✅ *Reply Sent successfully!* \n\n📨 *To:* ${emailRow.from_address}\n📝 *Message:* "${replyContent}"`;
       }
     } else if (cleanMsg === '/read') {
-      console.log(`[WhatsApp Webhook] Marking email ${emailRow.gmail_message_id} as read`);
       await markEmailAsRead(decryptedRefreshToken, emailRow.gmail_message_id);
       await updateEmailReadStatus(emailRow.id, true);
       replyStatus = `✉️ *Email marked as read.*`;
     } else if (cleanMsg === '/archive') {
-      console.log(`[WhatsApp Webhook] Archiving email ${emailRow.gmail_message_id}`);
       await archiveEmail(decryptedRefreshToken, emailRow.gmail_message_id);
       replyStatus = `📥 *Email archived.*`;
     } else if (cleanMsg === '/summary') {
       replyStatus = `💡 *AI Summary:*\n${emailRow.summary}`;
     }
 
-    // Send confirmation message to user on WhatsApp
     if (replyStatus && token && phoneId) {
       await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
         method: 'POST',
@@ -1079,87 +1012,43 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     res.status(200).send('EVENT_RECEIVED');
   } catch (err: any) {
-    console.error('[WhatsApp Webhook] Error processing incoming event:', err);
-    res.status(200).send('EVENT_RECEIVED'); // Keep return 200 to prevent retry storms from Meta
+    res.status(200).send('EVENT_RECEIVED');
   }
 });
 
-// ----------------------------------------------------
-// Gmail Pub/Sub Push Webhook (Instant Email Detection)
-// ----------------------------------------------------
 app.post('/webhook/gmail', async (req, res) => {
   try {
     const body = req.body;
-    if (!body?.message?.data) {
-      return res.status(200).send('OK'); // Acknowledge invalid messages
-    }
+    if (!body?.message?.data) return res.status(200).send('OK');
 
-    // Decode base64 Pub/Sub message
     const rawData = Buffer.from(body.message.data, 'base64').toString('utf8');
     const notification = JSON.parse(rawData);
-    const historyId = notification.historyId;
     const emailAddress = notification.emailAddress;
 
-    if (!emailAddress) {
-      return res.status(200).send('OK');
-    }
+    if (!emailAddress) return res.status(200).send('OK');
 
-    console.log(`[Pub/Sub] Gmail push received for ${emailAddress}, historyId: ${historyId}`);
-
-    // Find user by email and trigger sync
     const database = await getDb();
     const user = database.prepare('SELECT id FROM users WHERE email = ?').get(emailAddress) as { id: string } | undefined;
     if (user) {
-      console.log(`[Pub/Sub] Triggering instant sync for user ${user.id}...`);
-      runSyncForUser(user.id).catch((err) => {
-        console.error(`[Pub/Sub] Instant sync failed for user ${user.id}:`, err.message);
-      });
+      runSyncForUser(user.id).catch(() => {});
     }
 
     res.status(200).send('OK');
-  } catch (err: any) {
-    console.error('[Pub/Sub] Webhook error:', err.message);
-    res.status(200).send('OK'); // Always ACK to prevent Pub/Sub retry storm
+  } catch {
+    res.status(200).send('OK');
   }
 });
 
 // ----------------------------------------------------
-// DevOps / Health Check Endpoint
-// ----------------------------------------------------
-app.get('/health', (_req, res) => {
-  res.json({
-    status: 'OK',
-    uptime: process.uptime(),
-    timestamp: Date.now()
-  });
-});
-
-// ----------------------------------------------------
-// Privacy Policy Endpoint (Meta App Review Compliance)
+// Static Privacy Policy
 // ----------------------------------------------------
 app.get('/privacy', (_req, res) => {
   res.send(`
     <html>
-      <head>
-        <title>Privacy Policy - Mail2WhatsApp</title>
-        <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; line-height: 1.6; color: #333; }
-          h1 { color: #111; border-bottom: 1px solid #eee; padding-bottom: 10px; }
-          h2 { color: #333; margin-top: 30px; }
-        </style>
-      </head>
-      <body>
-        <h1>Privacy Policy</h1>
-        <p><strong>Last updated:</strong> July 5, 2026</p>
-        <p>Mail2WhatsApp ("we", "our", or "us") operates this notification gateway tool. We are committed to protecting your privacy and security.</p>
-        <h2>1. Information Processing</h2>
-        <p>Our application processes incoming email headers and summaries from your connected Gmail account for the sole purpose of analyzing urgency levels and routing priority notifications to your configured WhatsApp number.</p>
-        <h2>2. Data Storage & Privacy</h2>
-        <p>All database logs, configuration files, and authentication tokens are stored locally on your own private server and are never shared, uploaded, or exposed to third-party services, except for the required Google and Meta API endpoints.</p>
-        <h2>3. Third-Party Services</h2>
-        <p>This service utilizes the Google Gmail API for mail synchronization and the Meta Graph API for message dispatch. Your use of these integrations is governed by their respective privacy policies.</p>
-        <h2>4. Contact</h2>
-        <p>For any privacy concerns, please contact your system administrator.</p>
+      <head><title>Privacy Policy - Mail2WhatsApp</title></head>
+      <body style="font-family: sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; line-height: 1.6;">
+        <h1>Privacy Policy - Mail2WhatsApp AI</h1>
+        <p>Mail2WhatsApp is a private notification gateway. User data is processed locally in-memory and in self-hosted databases and is never sold or shared.</p>
       </body>
     </html>
   `);
@@ -1168,14 +1057,12 @@ app.get('/privacy', (_req, res) => {
 // ----------------------------------------------------
 // Frontend Asset Serving
 // ----------------------------------------------------
-
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, 'dist')));
   app.get('*', (_req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
   });
 } else {
-  // Integrate Vite dev server middleware dynamically
   const vite = await createViteServer({
     server: { middlewareMode: true },
     appType: 'spa',
@@ -1183,7 +1070,53 @@ if (process.env.NODE_ENV === 'production') {
   app.use(vite.middlewares);
 }
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`Server is running at http://localhost:${PORT}`);
+// ----------------------------------------------------
+// Centralized Error Handling Middleware
+// ----------------------------------------------------
+app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const requestId = (req as any).requestId;
+  console.error(`[Error] Request ${requestId} failed:`, err);
+
+  res.status(err.status || 500).json({
+    success: false,
+    error: {
+      code: err.code || 'INTERNAL_SERVER_ERROR',
+      message: process.env.NODE_ENV === 'production' ? 'An unexpected error occurred.' : err.message,
+      requestId
+    }
+  });
 });
+
+// ----------------------------------------------------
+// Graceful Shutdown Handling
+// ----------------------------------------------------
+const server = app.listen(PORT, () => {
+  console.log(`🚀 Mail2WhatsApp AI Enterprise Server running at http://localhost:${PORT}`);
+});
+
+async function handleGracefulShutdown(signal: string) {
+  console.log(`\n🛑 Received ${signal}. Commencing graceful shutdown sequence...`);
+  
+  server.close(async () => {
+    console.log('HTTP Server closed.');
+    stopOutboxWorker();
+    await closeQueues();
+    
+    try {
+      const database = await getDb();
+      database.close();
+      console.log('Database connection closed.');
+    } catch (e) {}
+
+    console.log('✅ Graceful shutdown complete. Exiting.');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error('⚠️ Forcing process exit after timeout.');
+    process.exit(1);
+  }, 10000);
+}
+
+process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));

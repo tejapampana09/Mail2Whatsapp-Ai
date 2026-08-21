@@ -1,5 +1,11 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import { env } from './config/env.config';
+import {
+  createOutboxJob,
+  getPendingOutboxJobs,
+  claimOutboxJob,
+  updateOutboxJobStatus,
+  resetStaleOutboxJobs
+} from './db';
 
 export interface WhatsAppSendResult {
   status: 'Sent' | 'Failed' | 'Disabled';
@@ -9,41 +15,80 @@ export interface WhatsAppSendResult {
 
 export function normalizeWhatsAppNumber(toNumber: string): string {
   const digitsAndPlus = toNumber.replace(/[^\d+]/g, '').trim();
-  if (!digitsAndPlus) {
-    return '';
-  }
+  if (!digitsAndPlus) return '';
 
   if (digitsAndPlus.startsWith('00')) {
-    return `+${digitsAndPlus.slice(2)}`;
+    return '+' + digitsAndPlus.slice(2);
   }
 
   if (!digitsAndPlus.startsWith('+') && digitsAndPlus.length > 0) {
-    // If it's a 10-digit number, default to Indian country code (+91)
     if (digitsAndPlus.length === 10) {
-      return `+91${digitsAndPlus}`;
+      return '+91' + digitsAndPlus;
     }
-    return `+${digitsAndPlus.replace(/^\+/, '')}`;
+    return '+' + digitsAndPlus.replace(/^\+/, '');
   }
 
   return digitsAndPlus;
 }
 
-export function getWhatsAppAuthFailureMessage(statusCode: number, error?: { code?: number; message?: string }): string {
-  const message = error?.message?.toLowerCase() || '';
-  const isAuthError = statusCode === 401 || error?.code === 190 || message.includes('authentication error') || message.includes('invalid oauth access token');
-
-  if (!isAuthError) {
-    return error?.message || `WhatsApp API request failed with HTTP ${statusCode}.`;
-  }
-
-  return [
-    'WhatsApp authentication failed with Meta. Verify that the WhatsApp Business account uses a permanent access token from Meta Business Manager, not a temporary token.',
-    'Confirm that the token belongs to the same app/business portfolio as the Phone Number ID and that the WhatsApp number is connected in the Meta WhatsApp Manager.',
-    'Update WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID in the backend .env file and restart the server.'
-  ].join(' ');
+export function checkWhatsAppConfig(): boolean {
+  const token = env.WHATSAPP_ACCESS_TOKEN;
+  const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
+  return !!(token && phoneId && !token.includes('replace_me') && !phoneId.includes('replace_me'));
 }
 
-function buildAlertMessage(
+export function classifyWhatsAppError(statusCode: number, errorPayload?: any): { isTransient: boolean; message: string } {
+  const code = errorPayload?.code;
+  const rawMsg = errorPayload?.message || '';
+
+  if (statusCode === 401 || code === 190) {
+    return {
+      isTransient: false,
+      message: 'Meta WhatsApp authentication failure. Permanent system user token required.'
+    };
+  }
+
+  if (statusCode === 400) {
+    if (code === 132018) {
+      return {
+        isTransient: false,
+        message: 'WhatsApp Template parameter mismatch (#132018). Ensure template variable counts match Meta configuration.'
+      };
+    }
+    return {
+      isTransient: false,
+      message: 'WhatsApp API client error (400): ' + rawMsg
+    };
+  }
+
+  if (statusCode === 403) {
+    return {
+      isTransient: false,
+      message: 'WhatsApp API permission denied (403): ' + rawMsg
+    };
+  }
+
+  if (statusCode === 429) {
+    return {
+      isTransient: true,
+      message: 'WhatsApp API rate limited (429). Retrying with backoff...'
+    };
+  }
+
+  if (statusCode >= 500 || statusCode === 408) {
+    return {
+      isTransient: true,
+      message: 'WhatsApp upstream server error (' + statusCode + '): ' + rawMsg
+    };
+  }
+
+  return {
+    isTransient: true,
+    message: rawMsg || ('WhatsApp request failed with status ' + statusCode)
+  };
+}
+
+export function buildAlertMessage(
   emailDetails: { from: string; subject: string; category: string; importance: string; summary: string },
   aiMetadata?: any
 ): string {
@@ -51,365 +96,375 @@ function buildAlertMessage(
   const importanceHeader = emailDetails.importance === 'High' ? 'URGENT EMAIL ALERT' : emailDetails.importance === 'Medium' ? 'EMAIL ALERT' : 'EMAIL NOTIFICATION';
   const divider = '━━━━━━━━━━━━━━━━━━━━━';
 
-  // Truncate summary to 300 chars
   const summary = emailDetails.summary.length > 300
     ? emailDetails.summary.substring(0, 297) + '...'
     : emailDetails.summary;
 
-  // Truncate subject
   const subject = emailDetails.subject.length > 80
     ? emailDetails.subject.substring(0, 77) + '...'
     : emailDetails.subject;
 
-  // Truncate from
   const from = emailDetails.from.length > 60
     ? emailDetails.from.substring(0, 57) + '...'
     : emailDetails.from;
 
-  let message = `${importanceEmoji} *${importanceHeader}*\n${divider}\n`;
-  message += `📨 *From:* ${from}\n`;
-  message += `📌 *Subject:* ${subject}\n`;
-  message += `🏷️ *Category:* ${emailDetails.category}  |  ⚡ *Priority:* ${emailDetails.importance}\n`;
-  message += `\n💡 *AI Summary:*\n${summary}\n`;
+  let message = importanceEmoji + ' *' + importanceHeader + '*\n' + divider + '\n';
+  message += '📨 *From:* ' + from + '\n';
+  message += '📌 *Subject:* ' + subject + '\n';
+  message += '🏷️ *Category:* ' + emailDetails.category + '  |  ⚡ *Priority:* ' + emailDetails.importance + '\n';
+  message += '\n💡 *AI Summary:*\n' + summary + '\n';
 
-  // Append AI metadata if available
   if (aiMetadata) {
     if (aiMetadata.actionRequired && aiMetadata.actionDetails) {
-      message += `\n⚠️ *Action Required:* ${aiMetadata.actionDetails}`;
+      message += '\n⚠️ *Action Required:* ' + aiMetadata.actionDetails;
     }
     if (aiMetadata.deadline) {
-      message += `\n⏰ *Deadline:* ${aiMetadata.deadline}`;
+      message += '\n⏰ *Deadline:* ' + aiMetadata.deadline;
     }
     if (aiMetadata.classifications && aiMetadata.classifications.length > 0) {
-      message += `\n🔖 *Tags:* ${aiMetadata.classifications.join(' • ')}`;
+      message += '\n🔖 *Tags:* ' + aiMetadata.classifications.join(' • ');
     }
     if (aiMetadata.spamScore && aiMetadata.spamScore > 60) {
-      message += `\n🚨 *Warning:* High spam/scam probability (${aiMetadata.spamScore}%)`;
+      message += '\n🚨 *Warning:* High spam/scam probability (' + aiMetadata.spamScore + '%)';
     }
     if (aiMetadata.calendarEvent) {
-      message += `\n📅 *Event:* ${aiMetadata.calendarEvent.title} — ${aiMetadata.calendarEvent.start}`;
+      message += '\n📅 *Event:* ' + aiMetadata.calendarEvent.title + ' — ' + aiMetadata.calendarEvent.start;
     }
   }
 
-  message += `\n\n${divider}\n🤖 _Powered by Mail2WhatsApp AI_`;
+  message += '\n\n' + divider + '\n🤖 _Powered by Mail2WhatsApp AI_';
   return message;
 }
 
-export async function sendWhatsAppAlert(
-  toNumber: string,
-  emailDetails: { from: string; subject: string; category: string; importance: string; summary: string },
-  aiMetadata?: any
-): Promise<WhatsAppSendResult> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+// ----------------------------------------------------
+// Direct Meta Cloud API Dispatcher
+// ----------------------------------------------------
+async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolean; messageId?: string; error?: string; isTransient?: boolean }> {
+  const token = env.WHATSAPP_ACCESS_TOKEN;
+  const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
 
-  if (!token || !phoneId || token.includes('replace_me') || phoneId.includes('replace_me')) {
-    console.warn('WhatsApp Cloud API credentials not configured in environment variables.');
-    return {
-      status: 'Failed',
-      error: 'WhatsApp API credentials not configured in backend environment.'
-    };
+  if (!token || !phoneId) {
+    return { success: false, error: 'WhatsApp credentials missing in environment.', isTransient: false };
   }
 
-  if (!toNumber) {
-    return {
-      status: 'Failed',
-      error: 'Alert destination phone number is missing in system settings.'
-    };
-  }
+  const url = 'https://graph.facebook.com/v20.0/' + phoneId + '/messages';
 
-  const cleanNumber = normalizeWhatsAppNumber(toNumber);
-  if (!cleanNumber) {
-    return {
-      status: 'Failed',
-      error: 'Alert destination phone number is invalid. Use an international format such as +15551234567.'
-    };
-  }
-
-  const messageText = buildAlertMessage(emailDetails, aiMetadata);
- 
-  const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
- 
-  const templateName = process.env.WHATSAPP_TEMPLATE_NAME;
-  const templateLang = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
- 
-  const payload: any = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: cleanNumber
-  };
- 
-  if (templateName) {
-    payload.type = 'template';
-    payload.template = {
-      name: templateName,
-      language: {
-        code: templateLang
-      },
-      components: [
-        {
-          type: 'body',
-          parameters: [
-            { type: 'text', text: emailDetails.from },
-            { type: 'text', text: emailDetails.subject },
-            { type: 'text', text: emailDetails.category },
-            { type: 'text', text: emailDetails.importance },
-            { type: 'text', text: emailDetails.summary }
-          ]
-        }
-      ]
-    };
-  } else {
-    payload.type = 'text';
-    payload.text = {
-      preview_url: false,
-      body: messageText
-    };
-  }
-
-  const dispatchMessage = async () => {
-    const response = await fetch(url, {
+  try {
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        'Authorization': 'Bearer ' + token,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15000)
     });
 
     let resJson: any = null;
     try {
-      resJson = await response.json();
+      resJson = await res.json();
     } catch {
       resJson = null;
     }
 
-    if (!response.ok) {
-      const errorPayload = resJson?.error;
-      const authMessage = getWhatsAppAuthFailureMessage(response.status, errorPayload);
-      throw new Error(authMessage);
+    if (!res.ok) {
+      const classified = classifyWhatsAppError(res.status, resJson?.error);
+      return {
+        success: false,
+        error: classified.message,
+        isTransient: classified.isTransient
+      };
     }
 
-    return resJson;
-  };
-
-  try {
-    // Attempt 1
-    const resData = await dispatchMessage();
-    const messageId = resData.messages?.[0]?.id;
-    return {
-      status: 'Sent',
-      messageId
-    };
+    const messageId = resJson?.messages?.[0]?.id;
+    return { success: true, messageId };
   } catch (err: any) {
-    console.error('WhatsApp dispatch attempt 1 failed:', err.message);
-
-    // Retry once
-    try {
-      console.log('Retrying WhatsApp dispatch once...');
-      const resData = await dispatchMessage();
-      const messageId = resData.messages?.[0]?.id;
-      return {
-        status: 'Sent',
-        messageId
-      };
-    } catch (retryErr: any) {
-      console.error('WhatsApp dispatch attempt 2 (retry) failed:', retryErr.message);
-      return {
-        status: 'Failed',
-        error: retryErr.message || 'Unknown WhatsApp API dispatch failure.'
-      };
-    }
+    return {
+      success: false,
+      error: err.message || 'WhatsApp network timeout',
+      isTransient: true
+    };
   }
 }
 
-export async function sendWhatsAppDigest(
+// ----------------------------------------------------
+// Outbox Enqueuing & Direct Immediate Dispatch
+// ----------------------------------------------------
+export async function sendWhatsAppAlert(
   toNumber: string,
-  stats: {
-    total: number;
-    high: number;
-    medium: number;
-    low: number;
-    categories: Record<string, number>;
-    topSubjects: string[];
-  }
+  emailDetails: { from: string; subject: string; category: string; importance: string; summary: string },
+  aiMetadata?: any,
+  options?: { userId?: string; emailEventId?: string }
 ): Promise<WhatsAppSendResult> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-
-  if (!token || !phoneId || token.includes('replace_me') || phoneId.includes('replace_me')) {
-    return { status: 'Failed', error: 'WhatsApp API credentials not configured.' };
+  if (!checkWhatsAppConfig()) {
+    return { status: 'Disabled', error: 'WhatsApp credentials not configured.' };
   }
 
   const cleanNumber = normalizeWhatsAppNumber(toNumber);
-  if (!cleanNumber) return { status: 'Failed', error: 'Invalid phone number.' };
+  if (!cleanNumber) {
+    return { status: 'Failed', error: 'Invalid phone number format.' };
+  }
 
-  const digestTemplate = process.env.WHATSAPP_DIGEST_TEMPLATE_NAME;
-  const digestLang = process.env.WHATSAPP_DIGEST_TEMPLATE_LANG || 'en';
+  const templateName = env.WHATSAPP_TEMPLATE_NAME;
+  const templateLang = env.WHATSAPP_TEMPLATE_LANG || 'en';
+  const messageText = buildAlertMessage(emailDetails, aiMetadata);
 
-  const divider = '━━━━━━━━━━━━━━━━━━━━━';
-  const now = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
-
-  const topSubjectsStr = stats.topSubjects.slice(0, 3).map((s, i) => `${i + 1}. ${s.length > 40 ? s.substring(0, 37) + '...' : s}`).join(', ');
-
-  const payload: any = {
+  let payload: any = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
     to: cleanNumber
   };
 
-  if (digestTemplate) {
+  let messageType: 'TEMPLATE_NOTIFICATION' | 'SESSION_MESSAGE' = 'SESSION_MESSAGE';
+
+  if (templateName) {
+    messageType = 'TEMPLATE_NOTIFICATION';
     payload.type = 'template';
     payload.template = {
-      name: digestTemplate,
-      language: {
-        code: digestLang
-      },
+      name: templateName,
+      language: { code: templateLang },
       components: [
         {
           type: 'body',
           parameters: [
-            { type: 'text', text: now },
-            { type: 'text', text: stats.total.toString() },
-            { type: 'text', text: stats.high.toString() },
-            { type: 'text', text: stats.medium.toString() },
-            { type: 'text', text: stats.low.toString() },
-            { type: 'text', text: topSubjectsStr || 'None' }
+            { type: 'text', text: emailDetails.from.substring(0, 60) },
+            { type: 'text', text: emailDetails.subject.substring(0, 80) },
+            { type: 'text', text: emailDetails.category },
+            { type: 'text', text: emailDetails.importance },
+            { type: 'text', text: emailDetails.summary.substring(0, 300) }
           ]
         }
       ]
     };
   } else {
-    let msg = `📊 *Daily Email Digest*\n${divider}\n`;
-    msg += `📅 *${now}*\n\n`;
-    msg += `📬 *Total Emails:* ${stats.total}\n`;
-    msg += `🔴 High Priority: ${stats.high}\n`;
-    msg += `🟡 Medium Priority: ${stats.medium}\n`;
-    msg += `🔵 Low Priority: ${stats.low}\n`;
-
-    if (Object.keys(stats.categories).length > 0) {
-      msg += `\n📂 *Categories:*\n`;
-      for (const [cat, count] of Object.entries(stats.categories).slice(0, 5)) {
-        msg += `  • ${cat}: ${count}\n`;
-      }
-    }
-
-    if (stats.topSubjects.length > 0) {
-      msg += `\n📌 *Top Subjects:*\n`;
-      stats.topSubjects.slice(0, 3).forEach((s, i) => {
-        const truncated = s.length > 50 ? s.substring(0, 47) + '...' : s;
-        msg += `  ${i + 1}. ${truncated}\n`;
-      });
-    }
-
-    msg += `\n${divider}\n🤖 _Mail2WhatsApp AI Daily Digest_`;
-
     payload.type = 'text';
-    payload.text = {
-      preview_url: false,
-      body: msg
-    };
+    payload.text = { preview_url: false, body: messageText };
   }
 
-  const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+  const idempotencyKey = 'whatsapp:' + (options?.userId || 'system') + ':' + (options?.emailEventId || Date.now());
+
+  if (options?.userId) {
+    await createOutboxJob({
+      userId: options.userId,
+      emailEventId: options.emailEventId,
+      phoneNumber: cleanNumber,
+      messageType,
+      templateName: templateName || undefined,
+      payload,
+      idempotencyKey
     });
-    const resJson: any = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(resJson?.error?.message || `HTTP ${response.status}`);
-    return { status: 'Sent', messageId: resJson?.messages?.[0]?.id };
-  } catch (err: any) {
-    return { status: 'Failed', error: err.message };
   }
+
+  const result = await executeMetaGraphDispatch(payload);
+  if (result.success) {
+    return { status: 'Sent', messageId: result.messageId };
+  }
+
+  return { status: 'Failed', error: result.error };
 }
 
-export function checkWhatsAppConfig(): boolean {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  return !!(token && phoneId && !token.includes('replace_me') && !phoneId.includes('replace_me'));
-}
-
-// ----------------------------------------------------
-// Voice Summary — Free Google TTS + WhatsApp Audio Upload
-// ----------------------------------------------------
-export async function sendWhatsAppVoiceSummary(
+export async function sendWhatsAppDigest(
   toNumber: string,
-  text: string
+  stats: { total: number; high: number; medium: number; low: number; categories: Record<string, number>; topSubjects: string[] }
 ): Promise<WhatsAppSendResult> {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-
-  if (!token || !phoneId || token.includes('replace_me')) {
-    return { status: 'Failed', error: 'WhatsApp credentials not configured.' };
+  if (!checkWhatsAppConfig()) {
+    return { status: 'Disabled', error: 'WhatsApp credentials not configured.' };
   }
 
   const cleanNumber = normalizeWhatsAppNumber(toNumber);
   if (!cleanNumber) return { status: 'Failed', error: 'Invalid phone number.' };
 
+  const digestTemplateName = env.WHATSAPP_DIGEST_TEMPLATE_NAME;
+  const digestTemplateLang = env.WHATSAPP_DIGEST_TEMPLATE_LANG || 'en';
+
+  let payload: any = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: cleanNumber
+  };
+
+  const top3Str = stats.topSubjects.length > 0
+    ? stats.topSubjects.map((s, i) => (i + 1) + '. ' + s.substring(0, 45)).join(' | ')
+    : 'None';
+
+  if (digestTemplateName) {
+    payload.type = 'template';
+    payload.template = {
+      name: digestTemplateName,
+      language: { code: digestTemplateLang },
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: String(stats.total) },
+            { type: 'text', text: String(stats.high) },
+            { type: 'text', text: String(stats.medium) },
+            { type: 'text', text: String(stats.low) },
+            { type: 'text', text: top3Str }
+          ]
+        }
+      ]
+    };
+  } else {
+    let body = '📊 *Daily Email Briefing*\n━━━━━━━━━━━━━━━━━━━━━\n';
+    body += '📬 *Total Processed:* ' + stats.total + '\n';
+    body += '🔴 *Urgent:* ' + stats.high + '  |  🟡 *Important:* ' + stats.medium + '  |  🔵 *Routine:* ' + stats.low + '\n\n';
+    if (stats.topSubjects.length > 0) {
+      body += '⚡ *Top Priority Emails:*\n';
+      stats.topSubjects.forEach((s, idx) => {
+        body += (idx + 1) + '. ' + s + '\n';
+      });
+    }
+    body += '\n━━━━━━━━━━━━━━━━━━━━━\n🤖 _Mail2WhatsApp AI Enterprise_';
+    payload.type = 'text';
+    payload.text = { preview_url: false, body };
+  }
+
+  const result = await executeMetaGraphDispatch(payload);
+  if (result.success) return { status: 'Sent', messageId: result.messageId };
+  return { status: 'Failed', error: result.error };
+}
+
+export async function sendWhatsAppVoiceSummary(
+  toNumber: string,
+  summaryText: string
+): Promise<WhatsAppSendResult> {
+  if (!checkWhatsAppConfig()) return { status: 'Disabled', error: 'WhatsApp not configured.' };
+  const cleanNumber = normalizeWhatsAppNumber(toNumber);
+  if (!cleanNumber) return { status: 'Failed', error: 'Invalid number.' };
+
+  const token = env.WHATSAPP_ACCESS_TOKEN;
+  const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
+
   try {
-    // Step 1: Generate audio via Free Google Translate TTS API (No billing, no key needed)
-    const ttsText = encodeURIComponent(text.length > 200 ? text.substring(0, 197) + '...' : text);
-    const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en-IN&client=tw-ob&q=${ttsText}`;
-
+    const ttsUrl = 'https://translate.google.com/translate_tts?ie=UTF-8&q=' + encodeURIComponent(summaryText.substring(0, 180)) + '&tl=en&client=tw-ob';
     const ttsRes = await fetch(ttsUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(10000)
     });
 
-    if (!ttsRes.ok) {
-      throw new Error(`Free Google TTS returned status ${ttsRes.status}`);
-    }
+    if (!ttsRes.ok) throw new Error('TTS fetch failed with HTTP ' + ttsRes.status);
+    const audioBuffer = await ttsRes.arrayBuffer();
 
-    const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
+    const form = new FormData();
+    form.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'summary.mp3');
+    form.append('type', 'audio/mpeg');
+    form.append('messaging_product', 'whatsapp');
 
-    // Step 2: Upload audio to WhatsApp Media API
-    const uploadUrl = `https://graph.facebook.com/v20.0/${phoneId}/media`;
-    const uploadFormData = new (globalThis.FormData)();
-    uploadFormData.append('messaging_product', 'whatsapp');
-    uploadFormData.append('type', 'audio/mpeg');
-    uploadFormData.append('file', new globalThis.Blob([audioBuffer], { type: 'audio/mpeg' }), 'summary.mp3');
-
-    const uploadRes = await fetch(uploadUrl, {
+    const uploadRes = await fetch('https://graph.facebook.com/v20.0/' + phoneId + '/media', {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}` },
-      body: uploadFormData
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: form,
+      signal: AbortSignal.timeout(15000)
     });
 
-    if (!uploadRes.ok) {
-      const errText = await uploadRes.text();
-      throw new Error(`WhatsApp media upload failed: ${errText}`);
-    }
+    if (!uploadRes.ok) throw new Error('Media upload failed: ' + (await uploadRes.text()));
+    const uploadData = await uploadRes.json();
+    const mediaId = uploadData.id;
 
-    const uploadData: any = await uploadRes.json();
-    const mediaId = uploadData?.id;
-    if (!mediaId) throw new Error('No media ID returned from WhatsApp upload.');
+    const audioPayload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanNumber,
+      type: 'audio',
+      audio: { id: mediaId }
+    };
 
-    // Step 3: Send audio message using media_id
-    const sendRes = await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: cleanNumber,
-        type: 'audio',
-        audio: { id: mediaId }
-      })
-    });
-
-    if (!sendRes.ok) {
-      const errText = await sendRes.text();
-      throw new Error(`WhatsApp audio send failed: ${errText}`);
-    }
-
-    const sendData: any = await sendRes.json();
-    return { status: 'Sent', messageId: sendData?.messages?.[0]?.id };
+    const sendRes = await executeMetaGraphDispatch(audioPayload);
+    if (sendRes.success) return { status: 'Sent', messageId: sendRes.messageId };
+    return { status: 'Failed', error: sendRes.error };
   } catch (err: any) {
-    console.error('[Voice] Free Voice summary failed:', err.message);
     return { status: 'Failed', error: err.message };
+  }
+}
+
+// ----------------------------------------------------
+// Persistent Outbox Background Processing Worker
+// ----------------------------------------------------
+const RETRY_BACKOFF_DELAYS = [
+  5 * 1000,        // Attempt 1: 5s
+  15 * 1000,       // Attempt 2: 15s
+  30 * 1000,       // Attempt 3: 30s
+  60 * 1000,       // Attempt 4: 1m
+  5 * 60 * 1000,   // Attempt 5: 5m
+  15 * 60 * 1000   // Attempt 6: 15m
+];
+
+export async function processOutboxBatch(): Promise<{ processed: number; sent: number; retried: number; failed: number }> {
+  await resetStaleOutboxJobs(3 * 60 * 1000);
+
+  const pendingJobs = await getPendingOutboxJobs(10);
+  let processed = 0;
+  let sent = 0;
+  let retried = 0;
+  let failed = 0;
+
+  for (const job of pendingJobs) {
+    const claimed = await claimOutboxJob(job.id);
+    if (!claimed) continue;
+
+    processed++;
+    let payload: any = null;
+    try {
+      payload = JSON.parse(job.payload);
+    } catch {
+      await updateOutboxJobStatus(job.id, 'DEAD_LETTER', { lastError: 'Malformed payload JSON' });
+      failed++;
+      continue;
+    }
+
+    const dispatchResult = await executeMetaGraphDispatch(payload);
+
+    if (dispatchResult.success) {
+      await updateOutboxJobStatus(job.id, 'SENT', {
+        providerMessageId: dispatchResult.messageId
+      });
+      sent++;
+    } else {
+      const nextAttemptCount = job.attempt_count + 1;
+      const isTransient = dispatchResult.isTransient !== false;
+
+      if (isTransient && nextAttemptCount <= RETRY_BACKOFF_DELAYS.length) {
+        const baseDelay = RETRY_BACKOFF_DELAYS[nextAttemptCount - 1] || 15 * 60 * 1000;
+        const jitter = Math.floor(baseDelay * (0.8 + Math.random() * 0.4));
+        const nextAttemptAt = Date.now() + jitter;
+
+        await updateOutboxJobStatus(job.id, 'PENDING', {
+          attemptCount: nextAttemptCount,
+          nextAttemptAt,
+          lastError: dispatchResult.error
+        });
+        retried++;
+      } else {
+        await updateOutboxJobStatus(job.id, 'DEAD_LETTER', {
+          attemptCount: nextAttemptCount,
+          lastError: dispatchResult.error
+        });
+        failed++;
+      }
+    }
+  }
+
+  return { processed, sent, retried, failed };
+}
+
+let outboxInterval: NodeJS.Timeout | null = null;
+
+export function startOutboxWorker() {
+  if (outboxInterval) return;
+  outboxInterval = setInterval(async () => {
+    try {
+      await processOutboxBatch();
+    } catch (err: any) {
+      console.error('[Outbox Worker] Batch processing exception:', err.message);
+    }
+  }, 15000);
+  console.log('Persistent WhatsApp Outbox Worker activated.');
+}
+
+export function stopOutboxWorker() {
+  if (outboxInterval) {
+    clearInterval(outboxInterval);
+    outboxInterval = null;
   }
 }

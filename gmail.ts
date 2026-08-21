@@ -1,10 +1,9 @@
 import { google } from 'googleapis';
-import dotenv from 'dotenv';
-dotenv.config();
+import { env } from './config/env.config';
 
-const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI;
+const CLIENT_ID = env.GOOGLE_CLIENT_ID;
+const CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET;
+const REDIRECT_URI = env.GOOGLE_REDIRECT_URI;
 
 export function getOAuth2Client() {
   if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
@@ -24,7 +23,7 @@ export function getAuthUrl() {
   ];
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    prompt: 'consent', // Force consent so we always get refresh token
+    prompt: 'consent',
     scope: scopes
   });
 }
@@ -46,11 +45,12 @@ export async function getUserInfo(accessToken: string) {
 export interface GmailAttachmentDetails {
   filename: string;
   mimeType: string;
-  data: string; // base64url
+  data: string;
 }
 
 export interface GmailMessageDetails {
   id: string;
+  threadId?: string;
   from: string;
   subject: string;
   date: string;
@@ -69,7 +69,6 @@ export async function fetchUnreadEmails(
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-  // Query: is:unread -label:SPAM -label:TRASH newer_than:1d
   const response = await gmail.users.messages.list({
     userId: 'me',
     q: 'is:unread -label:SPAM -label:TRASH newer_than:1d',
@@ -94,6 +93,7 @@ export async function fetchUnreadEmails(
       const subjectHeader = headers.find((h) => h.name?.toLowerCase() === 'subject')?.value || '(No Subject)';
       const dateHeader = headers.find((h) => h.name?.toLowerCase() === 'date')?.value || new Date().toISOString();
       const snippet = detail.data.snippet || '';
+      const threadId = detail.data.threadId || undefined;
       
       const body = extractBody(payload);
       const attachments = extractAttachments(payload);
@@ -105,6 +105,7 @@ export async function fetchUnreadEmails(
       
       emails.push({
         id: msg.id,
+        threadId,
         from: fromHeader,
         subject: subjectHeader,
         date: dateHeader,
@@ -113,8 +114,8 @@ export async function fetchUnreadEmails(
         attachments,
         downloadedAttachments
       });
-    } catch (err) {
-      console.error(`Failed to fetch message details for ID ${msg.id}:`, err);
+    } catch (err: any) {
+      console.error('Failed to fetch message details for ID ' + msg.id + ':', err.message);
     }
   }
 
@@ -144,8 +145,8 @@ async function downloadTargetAttachments(
               data: res.data.data
             });
           }
-        } catch (err) {
-          console.error(`Failed to download attachment ${part.filename} (ID: ${part.body.attachmentId}):`, err);
+        } catch (err: any) {
+          console.error('Failed to download attachment ' + part.filename + ':', err.message);
         }
       }
     }
@@ -223,6 +224,7 @@ export async function markEmailAsRead(refreshToken: string, id: string) {
     }
   });
 }
+
 export async function getGmailSyncStatus(refreshToken: string): Promise<boolean> {
   try {
     const oauth2Client = getOAuth2Client();
@@ -230,7 +232,7 @@ export async function getGmailSyncStatus(refreshToken: string): Promise<boolean>
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     await gmail.users.getProfile({ userId: 'me' });
     return true;
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -271,7 +273,6 @@ export async function replyToEmail(
   oauth2Client.setCredentials({ refresh_token: refreshToken });
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-  // 1. Fetch metadata of the original email
   const original = await gmail.users.messages.get({
     userId: 'me',
     id: originalGmailId,
@@ -286,22 +287,20 @@ export async function replyToEmail(
   const referencesHeader = headers.find(h => h.name?.toLowerCase() === 'references')?.value || '';
   const threadId = original.data.threadId;
 
-  // Extract email recipient from "From: Name <email>" format
   let toRecipient = fromHeader;
   const match = fromHeader.match(/<([^>]+)>/);
   if (match) {
     toRecipient = match[1];
   }
 
-  // 2. Build the raw MIME email
-  const cleanSubject = subjectHeader.toLowerCase().startsWith('re:') ? subjectHeader : `Re: ${subjectHeader}`;
-  const refs = referencesHeader ? `${referencesHeader} ${messageIdHeader}` : messageIdHeader;
+  const cleanSubject = subjectHeader.toLowerCase().startsWith('re:') ? subjectHeader : ('Re: ' + subjectHeader);
+  const refs = referencesHeader ? (referencesHeader + ' ' + messageIdHeader) : messageIdHeader;
 
   const emailLines = [
-    `To: ${toRecipient}`,
-    `Subject: ${cleanSubject}`,
-    `In-Reply-To: ${messageIdHeader}`,
-    `References: ${refs}`,
+    'To: ' + toRecipient,
+    'Subject: ' + cleanSubject,
+    'In-Reply-To: ' + messageIdHeader,
+    'References: ' + refs,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: 7bit',
@@ -316,7 +315,6 @@ export async function replyToEmail(
     .replace(/\//g, '_')
     .replace(/=+$/, '');
 
-  // 3. Send the reply using Gmail API
   const response = await gmail.users.messages.send({
     userId: 'me',
     requestBody: {
@@ -336,14 +334,13 @@ export async function createCalendarEvent(
   oauth2Client.setCredentials({ refresh_token: refreshToken });
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-  // Parse start date, fallback to 1 hour event if end is missing
   const start = new Date(eventDetails.start);
   if (isNaN(start.getTime())) {
-    throw new Error(`Invalid start date format: "${eventDetails.start}"`);
+    throw new Error('Invalid start date format: ' + eventDetails.start);
   }
   const end = eventDetails.end ? new Date(eventDetails.end) : new Date(start.getTime() + 60 * 60 * 1000);
   if (isNaN(end.getTime())) {
-    throw new Error(`Invalid end date format: "${eventDetails.end}"`);
+    throw new Error('Invalid end date format: ' + eventDetails.end);
   }
 
   const response = await calendar.events.insert({
