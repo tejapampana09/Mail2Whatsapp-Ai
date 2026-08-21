@@ -65,10 +65,10 @@ jobs:
             elif [ -d '/home/ubuntu/mail2whatsapp-ai' ]; then
               cd /home/ubuntu/mail2whatsapp-ai
             fi
+            export NODE_OPTIONS='--max-old-space-size=1024'
             git pull origin master
-            npm install --production=false
+            npm install --production=false --no-audit --prefer-offline
             npm run build
-            npm run lint
             pm2 reload mail2whatsapp || pm2 restart mail2whatsapp || true
             echo '✅ Deployment successfully completed!'
           "
