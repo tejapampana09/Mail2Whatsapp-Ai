@@ -255,7 +255,24 @@ export async function sendWhatsAppAlert(
     });
   }
 
-  const result = await executeMetaGraphDispatch(payload);
+  let result = await executeMetaGraphDispatch(payload);
+  
+  // If template fails due to parameter count mismatch (#132018) or not found (#132001), automatically fallback to rich text
+  if (!result.success && templateName && (result.error?.includes('132018') || result.error?.includes('132001') || result.error?.includes('template') || result.error?.includes('Template'))) {
+    console.warn(`[WhatsApp] Template "${templateName}" failed (${result.error}). Attempting automatic rich text fallback...`);
+    const fallbackPayload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanNumber,
+      type: 'text',
+      text: { preview_url: false, body: messageText }
+    };
+    const fallbackResult = await executeMetaGraphDispatch(fallbackPayload);
+    if (fallbackResult.success) {
+      return { status: 'Sent', messageId: fallbackResult.messageId };
+    }
+  }
+
   if (result.success) {
     return { status: 'Sent', messageId: result.messageId };
   }
@@ -413,7 +430,19 @@ export async function processOutboxBatch(): Promise<{ processed: number; sent: n
       continue;
     }
 
-    const dispatchResult = await executeMetaGraphDispatch(payload);
+    let dispatchResult = await executeMetaGraphDispatch(payload);
+
+    if (!dispatchResult.success && payload.type === 'template' && (dispatchResult.error?.includes('132018') || dispatchResult.error?.includes('132001'))) {
+      const fallbackText = payload.template?.components?.[0]?.parameters?.[4]?.text || 'Urgent Email Notification';
+      payload = {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: job.phone_number,
+        type: 'text',
+        text: { preview_url: false, body: `📬 *Email Alert*\n━━━━━━━━━━━━━━━\n${fallbackText}\n━━━━━━━━━━━━━━━\n🤖 _Mail2WhatsApp AI_` }
+      };
+      dispatchResult = await executeMetaGraphDispatch(payload);
+    }
 
     if (dispatchResult.success) {
       await updateOutboxJobStatus(job.id, 'SENT', {
