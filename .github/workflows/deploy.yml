@@ -44,7 +44,7 @@ jobs:
         continue-on-error: true
         env:
           SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_HOST: ${{ secrets.EC2_HOST || '3.80.187.41' }}
+          EC2_HOST: ${{ secrets.EC2_HOST || '100.58.158.253' }}
           EC2_USER: ${{ secrets.EC2_USER || 'ubuntu' }}
         run: |
           if [ -z "$SSH_KEY" ]; then
@@ -60,10 +60,10 @@ jobs:
           ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "
             set -e
             echo '🚀 Starting automated deployment on AWS EC2...'
-            if [ -d '/home/ubuntu/mail2whatsapp-ai' ]; then
-              cd /home/ubuntu/mail2whatsapp-ai
-            elif [ -d '/home/ubuntu/Mail2Whatsapp-Ai' ]; then
+            if [ -d '/home/ubuntu/Mail2Whatsapp-Ai' ]; then
               cd /home/ubuntu/Mail2Whatsapp-Ai
+            elif [ -d '/home/ubuntu/mail2whatsapp-ai' ]; then
+              cd /home/ubuntu/mail2whatsapp-ai
             fi
             git pull origin master
             npm install --production=false
