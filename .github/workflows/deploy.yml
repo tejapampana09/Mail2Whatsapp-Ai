@@ -44,8 +44,8 @@ jobs:
         continue-on-error: true
         env:
           SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_HOST: ${{ secrets.EC2_HOST || '100.58.158.253' }}
-          EC2_USER: ${{ secrets.EC2_USER || 'ubuntu' }}
+          EC2_HOST: whatsapp2mail.duckdns.org
+          EC2_USER: ubuntu
         run: |
           if [ -z "$SSH_KEY" ]; then
             echo "ℹ️ EC2_SSH_KEY secret is not configured in GitHub Secrets. Skipping automated deployment."
@@ -57,7 +57,7 @@ jobs:
           echo "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "
             set -e
             echo '🚀 Starting automated deployment on AWS EC2...'
             if [ -d '/home/ubuntu/Mail2Whatsapp-Ai' ]; then
