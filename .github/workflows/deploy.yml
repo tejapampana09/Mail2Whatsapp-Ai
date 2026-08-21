@@ -40,30 +40,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Deploy to AWS EC2 via Native SSH
+        env:
+          SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_HOST || '3.80.187.41' }}
+          EC2_USER: ${{ secrets.EC2_USER || 'ubuntu' }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "ℹ️ EC2_SSH_KEY secret is not configured in GitHub Secrets. Skipping automated deployment."
+            exit 0
+          fi
 
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        continue-on-error: true
-        with:
-          host: ${{ secrets.EC2_HOST || '3.80.187.41' }}
-          username: ${{ secrets.EC2_USER || 'ubuntu' }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          port: 22
-          timeout: 30s
-          command_timeout: 10m
-          script: |
+          echo "🚀 Connecting to AWS EC2 ($EC2_HOST)..."
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "
             set -e
-            echo "🚀 Starting automated deployment on AWS EC2..."
-            if [ -d "/home/ubuntu/mail2whatsapp-ai" ]; then
+            echo '🚀 Starting automated deployment on AWS EC2...'
+            if [ -d '/home/ubuntu/mail2whatsapp-ai' ]; then
               cd /home/ubuntu/mail2whatsapp-ai
-            elif [ -d "/home/ubuntu/Mail2Whatsapp-Ai" ]; then
+            elif [ -d '/home/ubuntu/Mail2Whatsapp-Ai' ]; then
               cd /home/ubuntu/Mail2Whatsapp-Ai
             fi
             git pull origin master
             npm install --production=false
             npm run build
             npm run lint
-            pm2 reload mail2whatsapp || pm2 restart mail2whatsapp || npm run start &
-            echo "✅ Deployment successfully executed!"
+            pm2 reload mail2whatsapp || pm2 restart mail2whatsapp || true
+            echo '✅ Deployment successfully completed!'
+          "
