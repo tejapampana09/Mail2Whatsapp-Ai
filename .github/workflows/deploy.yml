@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -36,7 +36,7 @@ jobs:
   deploy:
     name: Continuous Deployment to AWS EC2
     needs: validate
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:
@@ -45,16 +45,21 @@ jobs:
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
+        if: env.HAS_SSH_KEY == 'true'
+        env:
+          HAS_SSH_KEY: ${{ secrets.EC2_SSH_KEY != '' }}
         with:
           host: ${{ secrets.EC2_HOST || '3.80.187.41' }}
           username: ${{ secrets.EC2_USER || 'ubuntu' }}
           key: ${{ secrets.EC2_SSH_KEY }}
           port: 22
+          timeout: 30s
+          command_timeout: 10m
           script: |
             set -e
             echo "Starting deployment on production host..."
             cd /home/ubuntu/mail2whatsapp-ai || cd /home/ubuntu/Mail2Whatsapp-Ai
-            git pull origin main || git pull origin master
+            git pull origin master
             npm install --production=false
             npm run build
             npm run lint
