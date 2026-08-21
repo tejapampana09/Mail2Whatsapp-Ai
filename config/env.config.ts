@@ -3,6 +3,8 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const isTestOrCI = process.env.NODE_ENV === 'test' || !!process.env.CI || process.env.npm_lifecycle_event === 'test';
+
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
@@ -41,13 +43,27 @@ const envSchema = z.object({
 });
 
 function parseEnvironment() {
+  if (isTestOrCI) {
+    return envSchema.parse({
+      ...process.env,
+      NODE_ENV: 'test',
+      DATABASE_PATH: ':memory:',
+      JWT_SECRET: process.env.JWT_SECRET || 'test_jwt_secret_minimum_16_characters_2026',
+      LLM_API_KEY: process.env.LLM_API_KEY || 'test_mock_llm_api_key_2026',
+      GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || 'test_google_client_id.apps.googleusercontent.com',
+      GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || 'test_google_client_secret',
+      GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/auth/google/callback',
+      WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || 'test_whatsapp_access_token_2026',
+      WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '123456789012345'
+    });
+  }
+
   const result = envSchema.safeParse(process.env);
   if (!result.success) {
     console.error('CRITICAL: Environment variable validation failed:');
     for (const issue of result.error.issues) {
       console.error(' - ' + issue.path.join('.') + ': ' + issue.message);
     }
-    // Fail fast in production
     if (process.env.NODE_ENV === 'production' && !process.env.SKIP_ENV_VALIDATION) {
       process.exit(1);
     }

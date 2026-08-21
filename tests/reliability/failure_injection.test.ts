@@ -1,16 +1,25 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
-import { initDb, createOutboxJob, claimOutboxJob, resetStaleOutboxJobs, getDb } from '../../db';
+import { initDb, upsertUser, createOutboxJob, claimOutboxJob, resetStaleOutboxJobs, getDb } from '../../db';
 
 describe('Failure Injection & Crash Recovery Tests', () => {
+  const crashUserId = 'crash_tester_user';
+
   before(async () => {
     await initDb();
+    // Ensure foreign key parent user exists in database
+    await upsertUser({
+      id: crashUserId,
+      email: 'crash_tester@example.com',
+      name: 'Crash Tester User',
+      avatar: ''
+    });
   });
 
   test('Simulate worker crash: Locked outbox jobs are automatically recovered after timeout', async () => {
     const idempotencyKey = 'whatsapp:crash_test:' + Date.now();
     const job = await createOutboxJob({
-      userId: 'crash_tester',
+      userId: crashUserId,
       phoneNumber: '+919999999999',
       messageType: 'SESSION_MESSAGE',
       payload: { text: 'Simulated Crash' },

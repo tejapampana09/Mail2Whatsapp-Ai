@@ -1,15 +1,24 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
-import { initDb, createEmailEvent, createOutboxJob, getPendingOutboxJobs } from '../../db';
+import { initDb, upsertUser, createEmailEvent, createOutboxJob } from '../../db';
 
 describe('Database Concurrency & Idempotency Tests', () => {
+  const testUserId = 'test_user_idempotency';
+
   before(async () => {
     await initDb();
+    // Ensure foreign key parent user exists in database
+    await upsertUser({
+      id: testUserId,
+      email: 'test_idempotency@example.com',
+      name: 'Idempotency Test User',
+      avatar: ''
+    });
   });
 
   test('createEmailEvent prevents duplicate ingestion of same Gmail message', async () => {
     const eventPayload = {
-      userId: 'test_user_' + Date.now(),
+      userId: testUserId,
       gmailAccountId: 'acc_primary',
       gmailMessageId: 'msg_' + Date.now(),
       from: 'sender@example.com',
@@ -29,7 +38,7 @@ describe('Database Concurrency & Idempotency Tests', () => {
   test('createOutboxJob is idempotent based on deterministic idempotency_key', async () => {
     const idempotencyKey = 'whatsapp:test_user:event_' + Date.now();
     const jobPayload = {
-      userId: 'test_user',
+      userId: testUserId,
       phoneNumber: '+919876543210',
       messageType: 'SESSION_MESSAGE' as const,
       payload: { text: 'Hello' },
