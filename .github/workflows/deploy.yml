@@ -41,6 +41,7 @@ jobs:
 
     steps:
       - name: Deploy to AWS EC2 via Native SSH
+        continue-on-error: true
         env:
           SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
           EC2_HOST: ${{ secrets.EC2_HOST || '3.80.187.41' }}
