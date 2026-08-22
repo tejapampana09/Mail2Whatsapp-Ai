@@ -1,71 +1,11 @@
-// import Database dynamically for resilient fallback
 import crypto from 'crypto';
-import { env } from './config/env.config';
+import { env } from '../config/env.config';
+import { encryptText, decryptText, getEncryptionKey, getLegacyEncryptionKey } from '../utils/crypto';
+import { normalizeWhatsAppNumber, cleanPhoneNumberDigits } from '../utils/phone';
+
+export { encryptText, decryptText, getEncryptionKey, getLegacyEncryptionKey, normalizeWhatsAppNumber, cleanPhoneNumberDigits };
 
 let db: any = null;
-
-const GCM_ALGORITHM = 'aes-256-gcm';
-const CBC_ALGORITHM = 'aes-256-cbc';
-
-function getEncryptionKey(): Buffer {
-  const secret = env.DB_ENCRYPTION_KEY || env.JWT_SECRET;
-  return crypto.createHash('sha256').update(secret).digest();
-}
-
-function getLegacyEncryptionKey(): Buffer {
-  const secret = env.JWT_SECRET;
-  return crypto.createHash('sha256').update(secret).digest();
-}
-
-export function encryptText(text: string): string {
-  if (!text) return '';
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv(GCM_ALGORITHM, getEncryptionKey(), iv);
-  let encrypted = cipher.update(text, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  const authTag = cipher.getAuthTag();
-  return 'v2:' + iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
-}
-
-export function decryptText(encryptedText: string): string {
-  if (!encryptedText) return '';
-
-  // Format v2: Authenticated AES-256-GCM
-  if (encryptedText.startsWith('v2:')) {
-    try {
-      const parts = encryptedText.split(':');
-      if (parts.length !== 4) {
-        throw new Error('Malformed v2 ciphertext structure.');
-      }
-      const [, ivHex, tagHex, cipherHex] = parts;
-      const iv = Buffer.from(ivHex, 'hex');
-      const authTag = Buffer.from(tagHex, 'hex');
-      const decipher = crypto.createDecipheriv(GCM_ALGORITHM, getEncryptionKey(), iv);
-      decipher.setAuthTag(authTag);
-      let decrypted = decipher.update(cipherHex, 'hex', 'utf8');
-      decrypted += decipher.final('utf8');
-      return decrypted;
-    } catch (err: any) {
-      console.error('[Crypto] AES-256-GCM authentication/decryption failure:', err.message);
-      throw new Error('Failed to authenticate and decrypt ciphertext.');
-    }
-  }
-
-  // Legacy Format: AES-256-CBC with JWT_SECRET fallback for crash-safe rolling migration
-  try {
-    const parts = encryptedText.split(':');
-    if (parts.length < 2) throw new Error('Malformed legacy ciphertext.');
-    const iv = Buffer.from(parts.shift()!, 'hex');
-    const encrypted = parts.join(':');
-    const decipher = crypto.createDecipheriv(CBC_ALGORITHM, getLegacyEncryptionKey(), iv);
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-  } catch (legacyErr: any) {
-    console.error('[Crypto] Legacy CBC decryption failure:', legacyErr.message);
-    throw new Error('Failed to decrypt legacy ciphertext.');
-  }
-}
 
 class MemoryDatabaseMock {
   private tables = new Map<string, any[]>();

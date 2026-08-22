@@ -25,15 +25,7 @@ ENV PORT=3000
 COPY package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/server.ts ./
-COPY --from=builder /app/ai.ts ./
-COPY --from=builder /app/gmail.ts ./
-COPY --from=builder /app/whatsapp.ts ./
-COPY --from=builder /app/db.ts ./
-COPY --from=builder /app/logger.service.ts ./
-COPY --from=builder /app/config ./config
-COPY --from=builder /app/middleware ./middleware
-COPY --from=builder /app/services ./services
+COPY --from=builder /app/src ./src
 COPY --from=builder /app/scripts ./scripts
 
 # Create unprivileged application user

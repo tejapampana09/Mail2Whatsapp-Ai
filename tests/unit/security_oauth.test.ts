@@ -1,6 +1,6 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
-import { initDb, upsertUser, createOAuthState, consumeOAuthState } from '../../db';
+import { initDb, upsertUser, createOAuthState, consumeOAuthState } from '../../src/database/db';
 
 describe('OAuth Server-Side State Security Tests', () => {
   const testUserId = 'oauth_sec_user_1';

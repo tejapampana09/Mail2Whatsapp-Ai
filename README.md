@@ -1,160 +1,187 @@
 # 📧 Mail2WhatsApp AI ➡️ 💬
 
-<p align="center">
-  <img src="app_icon.png" width="160" height="160" alt="Mail2WhatsApp AI Logo" style="border-radius: 30px; box-shadow: 0 10px 25px rgba(0,0,0,0.35);" />
-</p>
+> **Production-hardened and ready for controlled 30+ day soak testing.**
 
-<p align="center">
-  <strong>Intelligent Real-Time Email Prioritization, Summarization, and WhatsApp Forwarding Gateway</strong>
-</p>
-
-<p align="center">
-  <a href="https://whatsapp2mail.duckdns.org"><strong>🚀 Live Production Link</strong></a> | <img src="https://img.shields.io/badge/version-2.0.1-blue.svg" alt="v2.0.1" inline />
-</p>
+Intelligent, real-time Gmail inbox prioritization, LLM analysis, and resilient Meta WhatsApp Cloud dispatch gateway.
 
 ---
 
-## 📖 Project Overview
-**Mail2WhatsApp AI** is a self-hosted, lightweight notification gateway designed to solve email overload. It continuously monitors your Gmail inbox, analyzes incoming emails using advanced LLM intelligence, filters out spam, categorizes them, drafts brief summaries of important emails, and forwards them directly to your WhatsApp.
-
-Built with a modern stack including **React, Node.js (TypeScript), SQLite, and Google Gemini**, it runs 24/7 on an AWS EC2 cloud instance under Caddy reverse-proxy and PM2.
+## 1. Overview
+**Mail2WhatsApp AI** is an enterprise-grade notification gateway designed to eliminate email overload. It continuously monitors your Gmail inbox via real-time Google Cloud Pub/Sub push notifications, analyzes incoming messages using Google Gemini AI (with heuristic rule fallbacks), and delivers concise, actionable notifications directly to your WhatsApp.
 
 ---
 
-## ✨ Key Features
-- 🔄 **Real-Time Gmail Poll Daemon:** Run as a continuous background service looking for new unread mail headers and bodies.
-- 🧠 **AI Priority Triage:** Integrates native `@google/genai` (specifically `gemini-2.5-flash`) to analyze and prioritize (High/Medium/Low) and classify (Work, Personal, System) emails.
-- 📝 **Intelligent Summarization:** Creates concise summaries of long emails so you can read them at a glance on the road.
-- 💬 **Flexible WhatsApp Dispatcher:** Integrates with Meta's Graph API. Supports both **Free-Form Text Messages** (24h session window) and **Template Messages** (bypasses 24h window).
-- 🔐 **Secure Design:** Self-hosted database (SQLite), session tokens protected with high-entropy JWT secrets, and no third-party data tracking.
-- 🛡️ **Auto HTTPS/SSL:** Built-in Caddy configuration for automatic SSL certificate provisioning.
+## 2. Architecture
 
----
-
-## 🛠️ Technology Stack
-- **Frontend:** React, Lucide Icons, Vite, Tailwind CSS (modern premium dark-mode dashboard).
-- **Backend:** Node.js, Express, TypeScript.
-- **Database:** SQLite (local cache for performance & absolute privacy).
-- **AI Core:** Google Gemini SDK (`@google/genai`).
-- **Hosting & Infrastructure:** AWS EC2 (t3.micro), Caddy Server (reverse proxy & SSL), PM2 (node process manager).
-- **DNS wildcards:** DuckDNS wildcard mapping.
-
----
-
-## 🔑 Environment Variables Configuration
-Create a `.env` file in the root directory:
-
-```env
-# LLM Provider Configuration
-LLM_PROVIDER=google
-LLM_API_KEY=your_gemini_api_key
-LLM_MODEL=gemini-2.5-flash
-
-# Google OAuth 2.0 Credentials (Gmail API)
-GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-GOOGLE_REDIRECT_URI=https://whatsapp2mail.duckdns.org/api/auth/google/callback
-
-# JWT Security
-JWT_SECRET=your_secure_64_character_hex_signing_secret
-
-# WhatsApp Cloud API Credentials
-WHATSAPP_ACCESS_TOKEN=your_meta_system_user_permanent_access_token
-WHATSAPP_PHONE_NUMBER_ID=your_meta_phone_number_id
-
-# (Optional) WhatsApp Template settings to bypass 24h window
-WHATSAPP_TEMPLATE_NAME=email_alert
-WHATSAPP_TEMPLATE_LANG=en
+```mermaid
+flowchart TD
+    A[Incoming Email] --> B[Gmail Service]
+    B --> C[Google Cloud Pub/Sub Push]
+    C --> D[POST /webhook/gmail]
+    D --> E{Google OIDC JWT Valid?}
+    E -- No --> F[HTTP 401 Reject]
+    E -- Yes --> G[Gmail Message Ingestion & HTML Sanitization]
+    G --> H[email_events SQLite Deduplication]
+    H --> I[AI Triage: Gemini / OpenRouter / Fallback]
+    I --> J[whatsapp_outbox: PENDING State]
+    J --> K[Persistent Outbox Worker]
+    K --> L[Atomic Lease Claim: locked_by + lease_expires_at]
+    L --> M[Meta WhatsApp Cloud API]
+    M -- 200 OK --> N[Status: SENT]
+    M -- 429 / 5xx --> O[Exponential Backoff + Jitter: PENDING]
+    M -- 401 / Max Retries --> P[Status: DEAD_LETTER]
+    
+    subgraph Asynchronous Orchestration
+        Q[Redis / BullMQ Queue] -.-> K
+    end
 ```
 
 ---
 
-## 🚀 Step-by-Step Setup Guide
-
-### 1. Google OAuth Client Configuration
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Enable the **Gmail API** (*APIs & Services > Library*).
-3. Set up the OAuth Consent Screen:
-   - User Type: **External**.
-   - Add scopes: `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile`, and `https://www.googleapis.com/auth/gmail.readonly`.
-   - Add your Gmail as a **Test User** (mandatory while app is in testing).
-4. Create **OAuth Client ID Credentials** (Web Application):
-   - **Authorized Redirect URIs:** Add `https://whatsapp2mail.duckdns.org/api/auth/google/callback` (production) and `http://localhost:3000/api/auth/google/callback` (local dev).
-5. Copy the Client ID and Secret to `.env`.
+## 3. Features
+- ⚡ **Real-Time Push Ingestion**: Sub-second webhook triggers from Google Cloud Pub/Sub.
+- 🛡️ **Cryptographic OIDC Security**: Validates Google JWKS signatures, issuer, audience, and GCP service accounts.
+- 🧠 **Multi-Tier AI Prioritization**: Primary Google Gemini 2.5 Flash with automatic OpenRouter and heuristic regex fallbacks.
+- 📬 **Durable WhatsApp Outbox**: Atomic lease claiming, zero synchronous HTTP delays in ingestion paths, and dead-letter queues.
+- 🔐 **Authenticated AES-256-GCM Encryption**: OAuth tokens and credentials encrypted at rest with zero log leakage.
+- 📊 **Prometheus Metrics**: Live `/metrics` exposition and health checks (`/health/live`, `/health/ready`).
 
 ---
 
-### 2. DuckDNS Wildcard Mapping Setup
-Google OAuth Console blocks raw IP addresses. To use a free custom domain:
-1. Log in to [DuckDNS](https://www.duckdns.org/).
-2. Add a new domain named `whatsapp2mail` (yielding `whatsapp2mail.duckdns.org`).
-3. Set the IP address of `whatsapp2mail` to your EC2 instance Public IP (`54.162.62.35`).
+## 4. Tech Stack
+- **Backend**: Node.js (v20+ LTS), Express, TypeScript.
+- **Frontend**: React 18, Vite, Tailwind CSS, Lucide Icons.
+- **Database**: SQLite 3 (WAL mode, busy_timeout=5000) via `better-sqlite3`.
+- **AI Engine**: Google Gemini (`@google/genai`), OpenRouter.
+- **Messaging**: Meta WhatsApp Cloud API (Graph API v20.0).
+- **Observability**: Prometheus text format, Pino structured JSON logging.
 
 ---
 
-### 3. Meta WhatsApp Cloud API Setup (Live Mode)
-To register your own number and get rid of sandbox test-number limitations:
-1. Go to the [Meta Developers Console](https://developers.facebook.com/).
-2. Add the **WhatsApp** product to your Business App.
-3. Switch App status from **In Development** to **Live** (requires linking a payment method, but the first 1,000 conversations every month are 100% free!).
-4. Add a permanent sender phone number in the *WhatsApp > API Setup* tab.
-5. Create a **System User** in Meta Business Manager and generate a **Permanent Access Token** with `whatsapp_business_messaging` scope.
-6. **(To bypass the 24-hour session window restriction):**
-   - Go to *Message Templates* in the WhatsApp manager and create a template named `email_alert`:
-     ```text
-     📧 New Urgent Email Alert
-     
-     From: {{1}}
-     Subject: {{2}}
-     Category: {{3}}
-     Urgency: {{4}}
-     
-     Gemini/LLM Summary:
-     {{5}}
-     ```
-   - Once approved, add `WHATSAPP_TEMPLATE_NAME=email_alert` to your `.env` file on the server.
+## 5. Repository Structure
+```text
+Mail2Whatsapp-Ai/
+├── src/
+│   ├── app/                # Express bootstrap, routes, shutdown handlers
+│   ├── config/             # Zod environment schemas and application constants
+│   ├── database/           # SQLite connection, DDL schema, migrations
+│   ├── services/
+│   │   ├── gmail/          # Gmail OAuth & API communication
+│   │   ├── whatsapp/       # WhatsApp alert builder & persistent outbox worker
+│   │   ├── ai/             # Gemini SDK triage, OpenRouter & fallback classifiers
+│   │   ├── pubsub/         # Google OIDC JWT verification
+│   │   ├── queue/          # BullMQ & Redis orchestration
+│   │   └── metrics/        # Prometheus exposition metrics
+│   ├── middleware/         # Auth, sliding-window rate limiting, request tracing
+│   ├── utils/              # Authenticated AES-256-GCM, phone & HTML sanitizers
+│   └── types/              # Domain interfaces
+├── tests/
+│   ├── unit/               # Fast component & unit test suites
+│   ├── integration/        # Database constraint & concurrency tests
+│   └── reliability/        # Soak tests, failure injection, backup drills
+├── docs/                   # Authoritative architecture, operations, and security docs
+├── Dockerfile              # Minimal multi-stage production Docker image
+├── docker-compose.yml      # Local containerized deployment
+└── docker-compose.production.yml
+```
 
 ---
 
-### 4. Deploying to AWS EC2 (Production Setup)
-1. **Launch Instance:**
-   - Launch a `t3.micro` EC2 Instance using **Ubuntu 24.04 LTS**.
-   - Associate a security group opening ports `22` (SSH), `80` (HTTP), and `443` (HTTPS).
-2. **Install Server Packages:**
-   ```bash
-   sudo apt-get update -y
-   sudo apt-get install -y curl git caddy
-   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-   sudo apt-get install -y nodejs
-   sudo npm install -g pm2
-   ```
-3. **Upload Files & Configure:**
-   - SCP project code and your customized `.env` to `/home/ubuntu/mail2whatsapp-ai/`.
-   - Run `npm install` and `npm run build` in the directory.
-4. **Launch Application:**
-   ```bash
-   NODE_ENV=production pm2 start "npx tsx server.ts" --name "mail2whatsapp" --cwd "/home/ubuntu/mail2whatsapp-ai"
-   pm2 save
-   pm2 startup
-   ```
-5. **Caddy Reverse Proxy Setup:**
-   Configure `/etc/caddy/Caddyfile`:
-   ```caddy
-   whatsapp2mail.duckdns.org {
-       reverse_proxy localhost:3000
-   }
-   ```
-   Restart Caddy: `sudo systemctl restart caddy`. Caddy will automatically secure your domain with Let's Encrypt HTTPS certificates!
+## 6. Local Development
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Run local development server
+npm run dev
+
+# 3. Access dashboard
+open http://localhost:3000
+```
 
 ---
 
-### 💻 Local Development
-1. Install dependencies: `npm install`
-2. Run in dev mode: `npm run dev`
-3. Open browser: `http://localhost:3000`
+## 7. Environment Variables
+Copy `.env.example` to `.env`:
+```env
+PORT=3000
+NODE_ENV=production
+DATABASE_PATH=mail2whatsapp.db
+JWT_SECRET=your_secure_64_character_hex_signing_secret
+DB_ENCRYPTION_KEY=your_secure_64_character_hex_encryption_key
+
+# Google Gemini / LLM Triage Configuration
+LLM_PROVIDER=google
+LLM_API_KEY=your_gemini_api_key
+LLM_MODEL=gemini-2.5-flash
+
+# Google Cloud OAuth 2.0 Credentials
+GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your_client_secret
+GOOGLE_REDIRECT_URI=https://whatsapp2mail.duckdns.org/api/auth/google/callback
+
+# WhatsApp Meta Cloud API
+WHATSAPP_ACCESS_TOKEN=your_meta_system_user_token
+WHATSAPP_PHONE_NUMBER_ID=your_meta_phone_number_id
+
+# Google Cloud Pub/Sub Webhook Security
+PUBSUB_AUDIENCE=https://whatsapp2mail.duckdns.org/webhook/gmail
+PUBSUB_SERVICE_ACCOUNT=your-pubsub-service-account@your-gcp-project.iam.gserviceaccount.com
+```
 
 ---
 
-## 📜 Privacy & Security
-This application is self-hosted. All fetched emails are processed in-memory and details are stored locally inside `database.db`. No data is ever transmitted to any third-party analytics company.
+## 8. Testing
+```bash
+# Run 55 tests across all 13 suites
+npm test
 
+# Typecheck & Lint
+npm run lint
+
+# Production Build
+npm run build
+```
+
+---
+
+## 9. Production Deployment
+```bash
+# PM2 Startup
+pm2 start "npm start" --name "mail2whatsapp"
+pm2 save
+pm2 startup
+```
+
+---
+
+## 10. Monitoring
+- **Liveness Probe**: `GET /health/live`
+- **Readiness Probe**: `GET /health/ready`
+- **Dependency Diagnostics**: `GET /health/dependencies`
+- **Prometheus Metrics**: `GET /metrics`
+
+---
+
+## 11. Disaster Recovery
+- Live atomic SQLite backup: `sqlite3 mail2whatsapp.db ".backup 'mail2whatsapp_backup.db'"`
+- Integrity validation: `sqlite3 mail2whatsapp.db "PRAGMA integrity_check;"`
+
+---
+
+## 12. Security
+- Pure Google OIDC JWT verification via `google-auth-library` (`OAuth2Client.verifyIdToken()`).
+- Authenticated AES-256-GCM token encryption with HMAC tampering detection.
+- Meta webhook HMAC-SHA256 signature verification.
+
+---
+
+## 13. Reliability Guarantees
+- **Durable At-Least-Once Delivery**: Events committed before acknowledge.
+- **Database Idempotency**: Unique constraints on message identifiers.
+- **Atomic Worker Leases**: Leases prevent concurrent worker dispatch collision.
+
+---
+
+## 14. License
+MIT License.

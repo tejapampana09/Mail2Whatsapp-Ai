@@ -32,6 +32,10 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Private SSH Keys
-mail2whatsapp-key.pem
+# Private SSH Keys & Credentials
+*.pem
+*.key
+credentials*.json
+token*.json
+backups/
 

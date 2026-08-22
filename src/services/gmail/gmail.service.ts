@@ -1,5 +1,8 @@
 import { google } from 'googleapis';
-import { env } from './config/env.config';
+import { env } from '../../config/env.config';
+import { sanitizeHtmlToText } from '../../utils/sanitization';
+
+export { sanitizeHtmlToText };
 
 const CLIENT_ID = env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = env.GOOGLE_CLIENT_SECRET;
@@ -154,34 +157,6 @@ async function downloadTargetAttachments(
       await downloadTargetAttachments(gmail, messageId, part.parts, results);
     }
   }
-}
-
-export function sanitizeHtmlToText(html: string): string {
-  if (!html) return '';
-  return html
-    // Strip scripts, styles, svg, and head blocks completely
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-    .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, '')
-    .replace(/<head\b[^<]*(?:(?!<\/head>)<[^<]*)*<\/head>/gi, '')
-    // Replace block-level tags with line breaks
-    .replace(/<\/(p|div|tr|h[1-6]|li|blockquote)>/gi, '\n')
-    .replace(/<br\s*[\/]?>/gi, '\n')
-    // Remove all remaining HTML tags
-    .replace(/<[^>]+>/g, ' ')
-    // Replace HTML entities
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)))
-    .replace(/&#([0-9]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 10)))
-    // Normalize excessive whitespace
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n\s*\n\s*\n+/g, '\n\n')
-    .trim();
 }
 
 function extractBody(payload: any): string {

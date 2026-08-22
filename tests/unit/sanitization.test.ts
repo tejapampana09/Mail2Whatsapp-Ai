@@ -1,7 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { sanitizeHtmlToText } from '../../gmail';
-import { sanitizeWhatsAppParam } from '../../whatsapp';
+import { sanitizeHtmlToText, sanitizeWhatsAppParam } from '../../src/utils/sanitization';
 
 describe('Sanitization & Security Formatting Unit Tests', () => {
   test('sanitizeHtmlToText strips scripts, styles, svgs and leaves clean text', () => {

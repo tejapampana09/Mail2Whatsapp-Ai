@@ -1,6 +1,6 @@
 import { OAuth2Client } from 'google-auth-library';
-import { env } from '../config/env.config';
-import logger from '../logger.service';
+import { env } from '../../config/env.config';
+import logger from '../../logger.service';
 
 const authClient = new OAuth2Client();
 

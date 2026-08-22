@@ -9,7 +9,7 @@ import {
   resetStaleOutboxJobs,
   requeueDeadLetterJob,
   getOutboxStats
-} from '../../db';
+} from '../../src/database/db';
 
 describe('Persistent WhatsApp Outbox State Machine & Lease Claiming Tests', () => {
   before(async () => {

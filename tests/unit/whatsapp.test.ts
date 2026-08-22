@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { normalizeWhatsAppNumber, classifyWhatsAppError, buildAlertMessage } from '../../whatsapp';
+import { normalizeWhatsAppNumber, classifyWhatsAppError, buildAlertMessage } from '../../src/services/whatsapp/whatsapp.service';
 
 describe('WhatsApp Service Unit Tests', () => {
   test('normalizeWhatsAppNumber handles 10 digit Indian numbers', () => {

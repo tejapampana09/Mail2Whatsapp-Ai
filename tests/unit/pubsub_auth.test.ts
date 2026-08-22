@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { verifyPubSubOidcToken } from '../../services/pubsub-auth.service';
+import { verifyPubSubOidcToken } from '../../src/services/pubsub/pubsub-auth.service';
 
 describe('Google Pub/Sub OIDC JWT Verification Security Tests', () => {
   test('Rejects missing or empty authorization header', async () => {

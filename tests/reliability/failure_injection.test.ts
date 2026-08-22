@@ -1,6 +1,7 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
-import { initDb, upsertUser, createOutboxJob, claimOutboxJob, resetStaleOutboxJobs, getDb } from '../../db';
+import { initDb, upsertUser, createOutboxJob, claimOutboxJob, resetStaleOutboxJobs, getDb } from '../../src/database/db';
+import { classifyWhatsAppError } from '../../src/services/whatsapp/whatsapp.service';
 
 describe('Failure Injection & Crash Recovery Tests', () => {
   const crashUserId = 'crash_tester_user';
@@ -45,13 +46,11 @@ describe('Failure Injection & Crash Recovery Tests', () => {
   });
 
   test('Simulate WhatsApp 429 Rate Limit: classify as transient with backoff retry', async () => {
-    const { classifyWhatsAppError } = await import('../../whatsapp');
     const classified = classifyWhatsAppError(429, { message: 'Rate limit hit' });
     assert.strictEqual(classified.isTransient, true);
   });
 
   test('Simulate WhatsApp 500/503 Upstream Server Outage: classify as transient with retry', async () => {
-    const { classifyWhatsAppError } = await import('../../whatsapp');
     const classified500 = classifyWhatsAppError(500, { message: 'Meta internal error' });
     assert.strictEqual(classified500.isTransient, true);
 
@@ -60,7 +59,6 @@ describe('Failure Injection & Crash Recovery Tests', () => {
   });
 
   test('Simulate WhatsApp 401 Auth Revocation: classify as non-transient permanent failure', async () => {
-    const { classifyWhatsAppError } = await import('../../whatsapp');
     const classified = classifyWhatsAppError(401, { code: 190, message: 'Invalid OAuth token' });
     assert.strictEqual(classified.isTransient, false);
   });

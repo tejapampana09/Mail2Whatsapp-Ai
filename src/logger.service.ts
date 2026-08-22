@@ -1,5 +1,5 @@
 import pino from 'pino';
-import { addLog } from './db';
+import { addLog } from './database/db';
 
 const isProduction = process.env.NODE_ENV === 'production';
 

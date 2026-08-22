@@ -1,6 +1,6 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
-import { initDb, upsertUser, saveSettings, getUserIdByWhatsAppNumber } from '../../db';
+import { initDb, upsertUser, saveSettings, getUserIdByWhatsAppNumber } from '../../src/database/db';
 
 describe('Phone Number Normalization & Anti-Wildcard Security Tests', () => {
   const user1 = 'phone_user_alpha';

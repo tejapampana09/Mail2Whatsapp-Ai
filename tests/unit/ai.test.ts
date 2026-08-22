@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { getFallbackAnalysis, llmResultSchema } from '../../ai';
+import { getFallbackAnalysis, llmResultSchema } from '../../src/services/ai/ai.service';
 
 describe('AI Triage & Zod Validation Unit Tests', () => {
   test('getFallbackAnalysis correctly classifies finance and otp emails as High priority', () => {

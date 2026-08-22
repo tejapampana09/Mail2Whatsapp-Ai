@@ -1,8 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import crypto from 'crypto';
-import { encryptText, decryptText } from '../../db';
-import { env } from '../../config/env.config';
+import { encryptText, decryptText } from '../../src/utils/crypto';
+import { env } from '../../src/config/env.config';
 
 describe('Database AES-256-GCM Encryption & Migration Tests', () => {
   test('encryptText produces v2 format with authentication tag', () => {

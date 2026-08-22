@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "preinstall": "node -e \"const major = Number(process.versions.node.split('.')[0]); if (major < 20) { console.error('ERROR: Mail2WhatsApp requires Node.js 20 LTS or higher.'); process.exit(1); }\"",
-    "dev": "tsx watch server.ts",
+    "dev": "tsx watch src/app/server.ts",
     "build": "vite build",
-    "start": "tsx server.ts",
+    "start": "tsx src/app/server.ts",
     "lint": "tsc --noEmit",
     "test": "tsx --test tests/**/*.test.ts"
   },

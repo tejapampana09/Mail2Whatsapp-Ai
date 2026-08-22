@@ -1,7 +1,7 @@
 import { Queue, Worker } from 'bullmq';
 import Redis from 'ioredis';
-import { env } from '../config/env.config';
-import { processOutboxBatch } from '../whatsapp';
+import { env } from '../../config/env.config';
+import { processOutboxBatch } from '../whatsapp/outbox.worker';
 
 let redisClient: Redis | null = null;
 let isRedisAvailable = false;
@@ -42,7 +42,6 @@ export function getRedisClient(): Redis | null {
 
     redisClient.on('error', (_err) => {
       isRedisAvailable = false;
-      // Silently handle Redis unavailability for smooth fallback
     });
 
     return redisClient;

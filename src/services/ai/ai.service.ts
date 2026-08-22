@@ -1,26 +1,10 @@
 import { GoogleGenAI } from '@google/genai';
-import { z } from 'zod';
-import { env } from './config/env.config';
+import { env } from '../../config/env.config';
+import { LLMResult, llmResultSchema } from './ai.types';
+import { getFallbackAnalysis } from './fallback.service';
 
-export const llmResultSchema = z.object({
-  category: z.string().default('Work'),
-  importance: z.enum(['High', 'Medium', 'Low']).default('Medium'),
-  summary: z.string(),
-  aiMetadata: z.object({
-    actionRequired: z.boolean().default(false),
-    actionDetails: z.string().nullable().default(null),
-    deadline: z.string().nullable().default(null),
-    classifications: z.array(z.string()).default([]),
-    spamScore: z.number().min(0).max(100).default(0),
-    calendarEvent: z.object({
-      title: z.string(),
-      start: z.string(),
-      end: z.string().nullable().optional()
-    }).nullable().default(null)
-  }).nullable().default(null)
-});
-
-export type LLMResult = z.infer<typeof llmResultSchema>;
+export { llmResultSchema, getFallbackAnalysis };
+export type { LLMResult };
 
 const OPENROUTER_FALLBACK_MODELS = [
   'openrouter/free',
@@ -271,53 +255,6 @@ export async function analyzeEmail(
 
   console.warn('[AI] All LLM provider attempts failed. Utilizing deterministic heuristic fallback.');
   return getFallbackAnalysis(from, subject, content);
-}
-
-export function getFallbackAnalysis(from: string, subject: string, content: string): LLMResult {
-  const lowerSubject = subject.toLowerCase();
-  const lowerFrom = from.toLowerCase();
-  const lowerContent = content.toLowerCase();
-
-  let category = 'Work';
-  let importance: 'High' | 'Medium' | 'Low' = 'Medium';
-  let summary = content.substring(0, 150) + (content.length > 150 ? '...' : '');
-
-  if (lowerSubject.includes('fraud') || lowerSubject.includes('blocked') || lowerSubject.includes('charge') || lowerSubject.includes('billing') || lowerSubject.includes('otp')) {
-    category = 'Finance';
-    importance = 'High';
-  } else if (lowerSubject.includes('security') || lowerSubject.includes('alert') || lowerSubject.includes('leaked') || lowerFrom.includes('github')) {
-    category = 'GitHub';
-    importance = 'High';
-  } else if (lowerSubject.includes('shipped') || lowerSubject.includes('order') || lowerSubject.includes('amazon')) {
-    category = 'Shopping';
-    importance = 'Low';
-  } else if (lowerSubject.includes('meeting') || lowerSubject.includes('kickoff') || lowerSubject.includes('schedule') || lowerSubject.includes('rescheduled')) {
-    category = 'Meetings';
-    importance = 'High';
-  } else if (lowerSubject.includes('recruiter') || lowerSubject.includes('career') || lowerSubject.includes('job opportunity') || lowerSubject.includes('hiring')) {
-    category = 'Recruiters';
-    importance = 'Medium';
-  } else if (lowerSubject.includes('free') || lowerSubject.includes('lottery') || lowerSubject.includes('bitcoin') || lowerSubject.includes('claim') || lowerContent.includes('lottery') || lowerContent.includes('win free')) {
-    category = 'Spam';
-    importance = 'Low';
-  } else if (lowerSubject.includes('newsletter') || lowerSubject.includes('weekly') || lowerSubject.includes('medium')) {
-    category = 'Education';
-    importance = 'Low';
-  }
-
-  return {
-    category,
-    importance,
-    summary,
-    aiMetadata: {
-      actionRequired: category === 'Meetings' || category === 'Important' || category === 'Action Required',
-      actionDetails: category === 'Meetings' ? 'Attend scheduled meeting' : null,
-      deadline: null,
-      classifications: category === 'Spam' ? ['Spam'] : (category === 'Meetings' ? ['Meeting'] : (category === 'Recruiters' ? ['Recruiter'] : [])),
-      spamScore: category === 'Spam' ? 95 : 5,
-      calendarEvent: null
-    }
-  };
 }
 
 async function callOpenRouterFallback(

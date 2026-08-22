@@ -1,4 +1,4 @@
-import { getOutboxStats } from '../db';
+import { getOutboxStats } from '../../database/db';
 
 class MetricsService {
   private counters = {

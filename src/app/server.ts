@@ -7,12 +7,15 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 
-import { env } from './config/env.config';
-import logger from './logger.service';
-import { requestIdMiddleware } from './middleware/request-id.middleware';
-import { metricsService } from './services/metrics.service';
-import { initQueues, closeQueues } from './services/queue.service';
-import { verifyPubSubOidcToken } from './services/pubsub-auth.service';
+import { env } from '../config/env.config';
+import logger from '../logger.service';
+import { requestIdMiddleware } from '../middleware/request-id.middleware';
+import { authenticateToken, AuthenticatedRequest } from '../middleware/auth.middleware';
+import { rateLimiter } from '../middleware/rate-limit.middleware';
+import { metricsService } from '../services/metrics/metrics.service';
+import { initQueues } from '../services/queue/queue.service';
+import { verifyPubSubOidcToken } from '../services/pubsub/pubsub-auth.service';
+import { setupGracefulShutdown } from './shutdown';
 
 import {
   initDb,
@@ -45,7 +48,7 @@ import {
   updateEmailEventStatus,
   updateSyncState,
   requeueDeadLetterJob
-} from './db';
+} from '../database/db';
 
 import {
   getAuthUrl,
@@ -56,24 +59,24 @@ import {
   archiveEmail,
   replyToEmail,
   createCalendarEvent,
-} from './gmail';
+} from '../services/gmail/gmail.service';
 
 import {
   analyzeEmail,
   getFallbackAnalysis
-} from './ai';
+} from '../services/ai/ai.service';
 
 import {
   sendWhatsAppAlert,
   sendWhatsAppDigest,
   sendWhatsAppVoiceSummary,
   checkWhatsAppConfig,
-  startOutboxWorker,
-  stopOutboxWorker
-} from './whatsapp';
+  startOutboxWorker
+} from '../services/whatsapp/whatsapp.service';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, '../../');
 
 const PORT = env.PORT;
 const JWT_SECRET = env.JWT_SECRET;
@@ -144,97 +147,8 @@ app.use(express.json({
   }
 }));
 
-// 6. Global In-Memory Rate Limiter with Periodic Garbage Collection
-const rateLimitWindowMs = 15 * 60 * 1000;
-const rateLimitMaxRequests = 1000;
-const ipRequestCounts = new Map<string, { count: number; resetTime: number }>();
-
-// Periodic memory pruning to prevent heap leaks
-const rateLimitCleaner = setInterval(() => {
-  const now = Date.now();
-  for (const [ip, record] of ipRequestCounts.entries()) {
-    if (now > record.resetTime) {
-      ipRequestCounts.delete(ip);
-    }
-  }
-}, 5 * 60 * 1000);
-rateLimitCleaner.unref();
-
-function rateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const ip = req.ip || req.socket.remoteAddress || 'unknown';
-  const now = Date.now();
-  
-  let record = ipRequestCounts.get(ip);
-  if (!record || now > record.resetTime) {
-    record = { count: 0, resetTime: now + rateLimitWindowMs };
-  }
-  
-  record.count++;
-  ipRequestCounts.set(ip, record);
-  
-  if (record.count > rateLimitMaxRequests) {
-    return res.status(429).json({
-      success: false,
-      error: {
-        code: 'RATE_LIMIT_EXCEEDED',
-        message: 'Too many requests. Please try again later.',
-        requestId: (req as any).requestId
-      }
-    });
-  }
-  
-  next();
-}
+// 6. Global In-Memory Rate Limiter
 app.use(rateLimiter);
-
-// ----------------------------------------------------
-// JWT Authentication Middleware
-// ----------------------------------------------------
-export interface AuthenticatedRequest extends express.Request {
-  user?: {
-    id: string;
-    email: string;
-  };
-  requestId?: string;
-}
-
-function authenticateToken(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) {
-  const authHeader = req.headers['authorization'];
-  let token = authHeader && authHeader.split(' ')[1];
-
-  if (!token && req.query.token) {
-    token = req.query.token as string;
-  }
-
-  if (!token) {
-    return res.status(401).json({
-      success: false,
-      error: {
-        code: 'AUTH_REQUIRED',
-        message: 'Session token required. Please log in.',
-        requestId: req.requestId
-      }
-    });
-  }
-
-  jwt.verify(token, JWT_SECRET, (err, decoded: any) => {
-    if (err) {
-      return res.status(403).json({
-        success: false,
-        error: {
-          code: 'INVALID_TOKEN',
-          message: 'Invalid or expired session token.',
-          requestId: req.requestId
-        }
-      });
-    }
-    req.user = {
-      id: decoded.id,
-      email: decoded.email
-    };
-    next();
-  });
-}
 
 // ----------------------------------------------------
 // Production Health Checks & Metrics
@@ -1161,12 +1075,14 @@ app.get('/privacy', (_req, res) => {
 // Frontend Asset Serving
 // ----------------------------------------------------
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, 'dist')));
+  const distPath = path.join(projectRoot, 'dist');
+  app.use(express.static(distPath));
   app.get('*', (_req, res) => {
-    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    res.sendFile(path.join(distPath, 'index.html'));
   });
 } else {
   const vite = await createViteServer({
+    root: projectRoot,
     server: { middlewareMode: true },
     appType: 'spa',
   });
@@ -1191,35 +1107,10 @@ app.use((err: any, req: express.Request, res: express.Response, _next: express.N
 });
 
 // ----------------------------------------------------
-// Graceful Shutdown Handling
+// Server Bootstrap & Graceful Shutdown
 // ----------------------------------------------------
 const server = app.listen(PORT, () => {
   console.log(`🚀 Mail2WhatsApp AI Enterprise Server running at http://localhost:${PORT}`);
 });
 
-async function handleGracefulShutdown(signal: string) {
-  console.log(`\n🛑 Received ${signal}. Commencing graceful shutdown sequence...`);
-  
-  server.close(async () => {
-    console.log('HTTP Server closed.');
-    stopOutboxWorker();
-    await closeQueues();
-    
-    try {
-      const database = await getDb();
-      database.close();
-      console.log('Database connection closed.');
-    } catch (e) {}
-
-    console.log('✅ Graceful shutdown complete. Exiting.');
-    process.exit(0);
-  });
-
-  setTimeout(() => {
-    console.error('⚠️ Forcing process exit after timeout.');
-    process.exit(1);
-  }, 10000);
-}
-
-process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
+setupGracefulShutdown(server);

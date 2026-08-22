@@ -1,6 +1,6 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
-import { initDb, upsertUser, createEmailEvent, createOutboxJob, claimOutboxJob, getDb } from '../../db';
+import { initDb, upsertUser, createEmailEvent, createOutboxJob, claimOutboxJob, getDb } from '../../src/database/db';
 
 describe('High-Concurrency Soak & 100x Duplicate-Event Deduplication Tests', () => {
   const soakUserId = 'soak_test_user_prime';
