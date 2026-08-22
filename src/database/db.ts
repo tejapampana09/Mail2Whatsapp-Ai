@@ -394,10 +394,61 @@ export async function initDb(): Promise<any> {
     )
   `);
 
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_oauth_states_lookup
-    ON oauth_states(token, consumed, expires_at)
-  `);
+  // Run automatic schema migrations for existing databases
+  const ensureColumn = (table: string, column: string, typeDef: string) => {
+    try {
+      if (typeof db.pragma === 'function') {
+        const cols = db.pragma(`table_info(${table})`);
+        if (Array.isArray(cols) && cols.length > 0 && !cols.some((c: any) => c.name === column)) {
+          console.log(`[DB Migration] Adding missing column ${column} to table ${table}`);
+          db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${typeDef}`);
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[DB Migration] Notice on column ${column} in ${table}:`, err.message);
+    }
+  };
+
+  // 1. Migrate whatsapp_outbox table
+  ensureColumn('whatsapp_outbox', 'email_event_id', 'TEXT');
+  ensureColumn('whatsapp_outbox', 'phone_number', 'TEXT DEFAULT ""');
+  ensureColumn('whatsapp_outbox', 'message_type', 'TEXT DEFAULT "SESSION_MESSAGE"');
+  ensureColumn('whatsapp_outbox', 'template_name', 'TEXT');
+  ensureColumn('whatsapp_outbox', 'payload', 'TEXT DEFAULT "{}"');
+  ensureColumn('whatsapp_outbox', 'status', 'TEXT DEFAULT "PENDING"');
+  ensureColumn('whatsapp_outbox', 'attempt_count', 'INTEGER DEFAULT 0');
+  ensureColumn('whatsapp_outbox', 'next_attempt_at', 'INTEGER DEFAULT 0');
+  ensureColumn('whatsapp_outbox', 'lease_expires_at', 'INTEGER DEFAULT 0');
+  ensureColumn('whatsapp_outbox', 'locked_by', 'TEXT');
+  ensureColumn('whatsapp_outbox', 'last_error', 'TEXT');
+  ensureColumn('whatsapp_outbox', 'provider_message_id', 'TEXT');
+  ensureColumn('whatsapp_outbox', 'idempotency_key', 'TEXT');
+  ensureColumn('whatsapp_outbox', 'sent_at', 'TEXT');
+  ensureColumn('whatsapp_outbox', 'created_at', 'TEXT DEFAULT ""');
+  ensureColumn('whatsapp_outbox', 'updated_at', 'TEXT DEFAULT ""');
+
+  // 2. Migrate email_events table
+  ensureColumn('email_events', 'gmail_account_id', 'TEXT');
+  ensureColumn('email_events', 'gmail_message_id', 'TEXT');
+  ensureColumn('email_events', 'thread_id', 'TEXT');
+  ensureColumn('email_events', 'from_address', 'TEXT');
+  ensureColumn('email_events', 'subject', 'TEXT');
+  ensureColumn('email_events', 'snippet', 'TEXT');
+  ensureColumn('email_events', 'content', 'TEXT');
+  ensureColumn('email_events', 'attachments', 'TEXT');
+  ensureColumn('email_events', 'status', 'TEXT DEFAULT "RECEIVED"');
+  ensureColumn('email_events', 'idempotency_key', 'TEXT');
+
+  // 3. Migrate oauth_tokens table
+  ensureColumn('oauth_tokens', 'gmail_email', 'TEXT');
+  ensureColumn('oauth_tokens', 'status', 'TEXT DEFAULT "ACTIVE"');
+  ensureColumn('oauth_tokens', 'last_sync_at', 'TEXT');
+  ensureColumn('oauth_tokens', 'last_successful_sync_at', 'TEXT');
+  ensureColumn('oauth_tokens', 'last_error', 'TEXT');
+
+  // 4. Migrate settings table
+  ensureColumn('settings', 'analyze_limit', 'INTEGER DEFAULT 10');
+  ensureColumn('settings', 'ai_provider', 'TEXT DEFAULT "google"');
 
   return db;
 }
