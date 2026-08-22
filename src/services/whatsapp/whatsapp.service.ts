@@ -2,12 +2,13 @@ import { env } from '../../config/env.config';
 import { createOutboxJob } from '../../database/db';
 import { normalizeWhatsAppNumber } from '../../utils/phone';
 import { sanitizeWhatsAppParam } from '../../utils/sanitization';
-import { WhatsAppSendResult, WhatsAppErrorClassification } from './whatsapp.types';
+import { WhatsAppSendResult, WhatsAppErrorClassification, classifyWhatsAppError } from './whatsapp.types';
 import { startOutboxWorker, stopOutboxWorker, processOutboxBatch } from './outbox.worker';
 
 export {
   normalizeWhatsAppNumber,
   sanitizeWhatsAppParam,
+  classifyWhatsAppError,
   startOutboxWorker,
   stopOutboxWorker,
   processOutboxBatch
@@ -21,57 +22,6 @@ export function checkWhatsAppConfig(): boolean {
   const token = env.WHATSAPP_ACCESS_TOKEN;
   const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
   return !!(token && phoneId && !token.includes('replace_me') && !phoneId.includes('replace_me'));
-}
-
-export function classifyWhatsAppError(statusCode: number, errorPayload?: any): { isTransient: boolean; message: string } {
-  const code = errorPayload?.code;
-  const rawMsg = errorPayload?.message || '';
-
-  if (statusCode === 401 || code === 190) {
-    return {
-      isTransient: false,
-      message: 'Meta WhatsApp authentication failure. Permanent system user token required.'
-    };
-  }
-
-  if (statusCode === 400) {
-    if (code === 132018) {
-      return {
-        isTransient: false,
-        message: 'WhatsApp Template parameter mismatch (#132018). Ensure template variable counts match Meta configuration.'
-      };
-    }
-    return {
-      isTransient: false,
-      message: 'WhatsApp API client error (400): ' + rawMsg
-    };
-  }
-
-  if (statusCode === 403) {
-    return {
-      isTransient: false,
-      message: 'WhatsApp API permission denied (403): ' + rawMsg
-    };
-  }
-
-  if (statusCode === 429) {
-    return {
-      isTransient: true,
-      message: 'WhatsApp API rate limited (429). Retrying with backoff...'
-    };
-  }
-
-  if (statusCode >= 500 || statusCode === 408) {
-    return {
-      isTransient: true,
-      message: 'WhatsApp upstream server error (' + statusCode + '): ' + rawMsg
-    };
-  }
-
-  return {
-    isTransient: true,
-    message: rawMsg || ('WhatsApp request failed with status ' + statusCode)
-  };
 }
 
 export function buildAlertMessage(

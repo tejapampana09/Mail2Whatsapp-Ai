@@ -766,7 +766,6 @@ export async function createOutboxJob(job: {
   idempotencyKey: string;
 }): Promise<{ id: string; isDuplicate: boolean }> {
   const database = await getDb();
-  
   const existing = database.prepare('SELECT id, status FROM whatsapp_outbox WHERE idempotency_key = ?').get(job.idempotencyKey) as any;
   if (existing) {
     return { id: existing.id, isDuplicate: true };

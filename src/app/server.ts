@@ -1010,6 +1010,35 @@ app.post('/api/outbox/:id/requeue', authenticateToken, async (req: Authenticated
   }
 });
 
+app.post('/api/test/whatsapp', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const settings = await getSettings(userId);
+    if (!settings?.whatsapp_number) {
+      return res.status(400).json({ error: 'WhatsApp number not configured in Settings.' });
+    }
+
+    const testAlert = {
+      from: 'alerts@google.com',
+      subject: 'Urgent: Production System Live Test',
+      category: 'System',
+      importance: 'High',
+      summary: 'This is a real-time verification alert confirming your Mail2WhatsApp AI gateway is fully operational.'
+    };
+
+    const pushResult = await sendWhatsAppAlert(
+      settings.whatsapp_number,
+      testAlert,
+      { actionRequired: true, actionDetails: 'None (System operational)' },
+      { userId, emailEventId: 'test_' + Date.now() }
+    );
+
+    res.json({ success: true, pushResult });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/webhook/gmail', async (req, res) => {
   try {
     metricsService.increment('pubsub_received_total');

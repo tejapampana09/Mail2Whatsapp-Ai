@@ -41,6 +41,8 @@ export default function Settings({ settings, onSave }: SettingsProps) {
   const [whatsappConnected, setWhatsappConnected] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [isTestingWhatsApp, setIsTestingWhatsApp] = useState(false);
+  const [testWhatsAppStatus, setTestWhatsAppStatus] = useState<{ success: boolean; message: string } | null>(null);
 
   // Multi-Gmail accounts state
   const [gmailAccounts, setGmailAccounts] = useState<ConnectedAccount[]>([]);
@@ -156,6 +158,30 @@ export default function Settings({ settings, onSave }: SettingsProps) {
   const handleAddAccountClick = () => {
     const token = localStorage.getItem('mail2whatsapp_token');
     window.location.href = `/api/auth/google/add-account?token=${token}`;
+  };
+
+  const handleTestWhatsApp = async () => {
+    setIsTestingWhatsApp(true);
+    setTestWhatsAppStatus(null);
+    try {
+      const res = await fetch('/api/test/whatsapp', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('mail2whatsapp_token')}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTestWhatsAppStatus({ success: true, message: `✓ Test alert delivered to ${whatsappNumber}! Check your WhatsApp.` });
+      } else {
+        setTestWhatsAppStatus({ success: false, message: `⚠ ${data.error || 'Failed to dispatch test message.'}` });
+      }
+    } catch (err: any) {
+      setTestWhatsAppStatus({ success: false, message: `⚠ Network error: ${err.message}` });
+    } finally {
+      setIsTestingWhatsApp(false);
+    }
   };
 
   const categories = [
@@ -558,8 +584,25 @@ export default function Settings({ settings, onSave }: SettingsProps) {
                   required={whatsappNotificationsEnabled}
                 />
                 <p className="text-[10px] text-gray-500">
-                  Enter target alert line in E.164 international formats for simulated secure push.
+                  Enter target alert line in E.164 international formats (e.g. +919542696946).
                 </p>
+
+                <div className="pt-2 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={handleTestWhatsApp}
+                    disabled={isTestingWhatsApp || !whatsappNumber}
+                    className="glass-panel px-4 py-2 rounded-xl text-xs font-semibold text-emerald-400 hover:text-emerald-300 hover:border-emerald-500/30 transition-all flex items-center space-x-2 disabled:opacity-50 cursor-pointer"
+                  >
+                    <span>{isTestingWhatsApp ? 'Sending Test Alert...' : '⚡ Send Test WhatsApp Alert'}</span>
+                  </button>
+
+                  {testWhatsAppStatus && (
+                    <span className={`text-xs font-mono font-semibold ${testWhatsAppStatus.success ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {testWhatsAppStatus.message}
+                    </span>
+                  )}
+                </div>
               </div>
             )}
           </div>

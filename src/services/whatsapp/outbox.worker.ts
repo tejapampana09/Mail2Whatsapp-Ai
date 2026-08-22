@@ -6,7 +6,7 @@ import {
   updateOutboxJobStatus,
   resetStaleOutboxJobs
 } from '../../database/db';
-import { classifyWhatsAppError } from './whatsapp.service';
+import { classifyWhatsAppError } from './whatsapp.types';
 
 async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolean; messageId?: string; error?: string; isTransient?: boolean }> {
   const token = env.WHATSAPP_ACCESS_TOKEN;
@@ -57,6 +57,7 @@ async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolea
 }
 
 export async function processOutboxBatch(): Promise<{ processed: number; sent: number; retried: number; failed: number }> {
+  metricsService.increment('worker_runs_total');
   await resetStaleOutboxJobs(env.WHATSAPP_STALE_TIMEOUT_MS);
 
   const pendingJobs = await getPendingOutboxJobs(env.WHATSAPP_BATCH_SIZE);
