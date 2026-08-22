@@ -1187,26 +1187,48 @@ export async function getUserIdByWhatsAppNumber(whatsappNumber: string): Promise
 
 export async function getLatestEmail(userId: string): Promise<any | null> {
   const database = await getDb();
-  const stmt = database.prepare('SELECT * FROM emails WHERE user_id = ? ORDER BY rowid DESC LIMIT 1');
-  const row = stmt.get(userId) as any;
-  if (!row) return null;
-  return {
-    id: row.id,
-    user_id: row.user_id,
-    gmail_message_id: row.gmail_message_id,
-    from_address: row.from_address,
-    subject: row.subject,
-    content: row.content,
-    summary: row.summary,
-    category: row.category,
-    importance: row.importance,
-    date: row.date,
-    whatsapp_status: row.whatsapp_status,
-    whatsapp_message_id: row.whatsapp_message_id,
-    delivery_error: row.delivery_error,
-    is_read: row.is_read === 1,
-    created_at: row.created_at
-  };
+  let row = database.prepare('SELECT * FROM emails WHERE user_id = ? ORDER BY rowid DESC LIMIT 1').get(userId) as any;
+  if (row) {
+    return {
+      id: row.id,
+      user_id: row.user_id,
+      gmail_message_id: row.gmail_message_id,
+      from_address: row.from_address,
+      subject: row.subject,
+      content: row.content,
+      summary: row.summary,
+      category: row.category,
+      importance: row.importance,
+      date: row.date,
+      whatsapp_status: row.whatsapp_status,
+      whatsapp_message_id: row.whatsapp_message_id,
+      delivery_error: row.delivery_error,
+      is_read: row.is_read === 1,
+      created_at: row.created_at
+    };
+  }
+
+  // Fallback to email_events table if emails table is empty
+  const eventRow = database.prepare('SELECT * FROM email_events WHERE user_id = ? ORDER BY rowid DESC LIMIT 1').get(userId) as any;
+  if (eventRow) {
+    return {
+      id: eventRow.id,
+      user_id: eventRow.user_id,
+      gmail_message_id: eventRow.gmail_message_id,
+      from_address: eventRow.from_address,
+      subject: eventRow.subject,
+      content: eventRow.content || eventRow.snippet,
+      summary: eventRow.snippet || eventRow.subject,
+      category: 'General',
+      importance: 'Medium',
+      date: eventRow.created_at,
+      whatsapp_status: 'Sent',
+      is_read: false,
+      created_at: eventRow.created_at
+    };
+  }
+
+  return null;
 }
 
 // Logs DB Methods
