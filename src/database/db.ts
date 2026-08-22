@@ -1136,8 +1136,9 @@ export async function deleteEmail(userId: string, emailId: string) {
 
 export async function clearEmails(userId: string) {
   const database = await getDb();
-  const stmt = database.prepare('DELETE FROM emails WHERE user_id = ?');
-  return stmt.run(userId);
+  database.prepare('DELETE FROM emails WHERE user_id = ?').run(userId);
+  database.prepare('DELETE FROM email_events WHERE user_id = ?').run(userId);
+  return true;
 }
 
 export async function getEmailByWhatsAppMessageId(whatsappMessageId: string): Promise<any | null> {

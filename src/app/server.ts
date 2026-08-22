@@ -414,6 +414,16 @@ app.post('/api/emails/delete', authenticateToken, async (req: AuthenticatedReque
   }
 });
 
+app.post('/api/emails/clear', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    await clearEmails(req.user!.id);
+    await addLog(req.user!.id, 'INFO', 'PURGE_ALL_EMAILS', 'All stored email records and summaries purged by user.');
+    res.json({ success: true, message: 'All stored email history cleared.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/logs', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const logs = await getLogs(req.user!.id);

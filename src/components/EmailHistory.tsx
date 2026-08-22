@@ -19,13 +19,15 @@ interface EmailHistoryProps {
   emails: ProcessedEmail[];
   isLoading: boolean;
   onDelete: (id: string) => Promise<boolean>;
+  onClearAll?: () => Promise<boolean>;
 }
 
-export default function EmailHistory({ emails, isLoading, onDelete }: EmailHistoryProps) {
+export default function EmailHistory({ emails, isLoading, onDelete, onClearAll }: EmailHistoryProps) {
   const [selectedEmail, setSelectedEmail] = useState<ProcessedEmail | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedImportance, setSelectedImportance] = useState('all');
+  const [isClearing, setIsClearing] = useState(false);
 
   const getCategoryStyle = (category: EmailCategory) => {
     switch (category) {
@@ -63,6 +65,21 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
     }
   };
 
+  const handleClearAllClick = async () => {
+    if (!onClearAll) return;
+    if (confirm('⚠️ Are you sure you want to permanently clear ALL stored email history and AI summaries from the database? This cannot be undone.')) {
+      setIsClearing(true);
+      try {
+        const ok = await onClearAll();
+        if (ok) {
+          setSelectedEmail(null);
+        }
+      } finally {
+        setIsClearing(false);
+      }
+    }
+  };
+
   // Filter logic
   const filteredEmails = emails.filter((email) => {
     const matchesSearch =
@@ -80,9 +97,21 @@ export default function EmailHistory({ emails, isLoading, onDelete }: EmailHisto
     <div className="space-y-6" id="history-tab">
       {/* Filter and Search Bar */}
       <div className="glass-panel rounded-[24px] p-5 shadow-lg space-y-4">
-        <div className="flex items-center space-x-2 text-white">
-          <Filter className="w-4 h-4 text-gray-400" />
-          <h3 className="text-xs font-semibold tracking-wider uppercase font-mono text-gray-400">Filter Engine</h3>
+        <div className="flex items-center justify-between text-white">
+          <div className="flex items-center space-x-2">
+            <Filter className="w-4 h-4 text-gray-400" />
+            <h3 className="text-xs font-semibold tracking-wider uppercase font-mono text-gray-400">Filter Engine</h3>
+          </div>
+          {emails.length > 0 && onClearAll && (
+            <button
+              onClick={handleClearAllClick}
+              disabled={isClearing}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-medium transition-all cursor-pointer disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{isClearing ? 'Clearing...' : 'Clear All Emails'}</span>
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4">

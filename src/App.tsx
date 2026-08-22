@@ -159,6 +159,22 @@ export default function App() {
     }
   };
 
+  const handleClearEmails = async (): Promise<boolean> => {
+    if (!token) return false;
+    try {
+      const res = await authenticatedFetch('/api/emails/clear', { method: 'POST' });
+      if (res && res.ok) {
+        await fetchEmails();
+        await fetchLogs();
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('Failed to clear emails:', err);
+      return false;
+    }
+  };
+
   const handleClearLogs = async (): Promise<boolean> => {
     if (!token) return false;
     try {
@@ -323,6 +339,7 @@ export default function App() {
               emails={emails}
               isLoading={isLoadingEmails}
               onDelete={handleDeleteEmail}
+              onClearAll={handleClearEmails}
             />
           )}
 
