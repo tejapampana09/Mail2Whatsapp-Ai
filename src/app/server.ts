@@ -74,6 +74,8 @@ import {
   startOutboxWorker
 } from '../services/whatsapp/whatsapp.service';
 
+import { normalizeWhatsAppNumber } from '../utils/phone';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '../../');
@@ -928,7 +930,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     const cleanMsg = msgText.toLowerCase().trim();
     const token = env.WHATSAPP_ACCESS_TOKEN;
     const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
-    const cleanNumber = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
+    const cleanNumber = normalizeWhatsAppNumber(fromNumber) || fromNumber.replace(/[^\d]/g, '');
 
     // Helper to send text message back to WhatsApp
     const sendWhatsAppReply = async (bodyText: string) => {
