@@ -1,5 +1,4 @@
-import { getDb } from '../db';
-import { resetStaleOutboxJobs } from '../whatsapp';
+import { getDb, resetStaleOutboxJobs } from '../src/database/db';
 
 async function runMaintenance() {
   console.log('[Maintenance] Starting 30-day scheduled database maintenance task...');

@@ -8,6 +8,7 @@
     "dev": "tsx watch src/app/server.ts",
     "build": "vite build",
     "start": "tsx src/app/server.ts",
+    "maintenance": "tsx scripts/maintenance.ts",
     "lint": "tsc --noEmit",
     "test": "tsx --test tests/**/*.test.ts"
   },
