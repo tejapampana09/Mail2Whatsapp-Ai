@@ -191,6 +191,11 @@ export async function sendWhatsAppAlert(
     return { status: 'Sent' };
   }
 
+  // Trigger immediate dispatch asynchronously for instant sub-second delivery
+  processOutboxBatch().catch((err) => {
+    console.error('[WhatsApp] Immediate batch dispatch error:', err.message);
+  });
+
   return { status: 'Sent' };
 }
 
@@ -263,6 +268,10 @@ export async function sendWhatsAppDigest(
     templateName: digestTemplateName || undefined,
     payload,
     idempotencyKey
+  });
+
+  processOutboxBatch().catch((err) => {
+    console.error('[WhatsApp] Immediate digest dispatch error:', err.message);
   });
 
   return { status: 'Sent' };
