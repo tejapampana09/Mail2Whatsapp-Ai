@@ -1027,7 +1027,13 @@ app.post('/webhook/whatsapp', async (req, res) => {
         replyStatus = `⚠️ *Could not locate message ID for this email.*`;
       } else {
         try {
-          await replyToEmail(decryptedRefreshToken, emailRow.gmail_message_id, replyContent);
+          await replyToEmail(
+            decryptedRefreshToken,
+            emailRow.gmail_message_id,
+            replyContent,
+            emailRow.from_address,
+            emailRow.subject
+          );
           replyStatus = `✅ *Reply Sent successfully!* \n\n📨 *To:* ${emailRow.from_address}\n📝 *Message:* "${replyContent}"`;
         } catch (replyErr: any) {
           logger.error({ type: 'GMAIL_REPLY_ERR', description: `Gmail reply API error: ${replyErr.message}` });

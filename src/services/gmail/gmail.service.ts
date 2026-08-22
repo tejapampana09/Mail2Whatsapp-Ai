@@ -15,36 +15,6 @@ export function getOAuth2Client() {
   return new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
 }
 
-export function getAuthUrl() {
-  const oauth2Client = getOAuth2Client();
-  const scopes = [
-    'openid',
-    'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/userinfo.profile',
-    'https://www.googleapis.com/auth/gmail.modify',
-    'https://www.googleapis.com/auth/calendar.events'
-  ];
-  return oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    prompt: 'consent',
-    scope: scopes
-  });
-}
-
-export async function exchangeCodeForTokens(code: string) {
-  const oauth2Client = getOAuth2Client();
-  const { tokens } = await oauth2Client.getToken(code);
-  return tokens;
-}
-
-export async function getUserInfo(accessToken: string) {
-  const oauth2Client = getOAuth2Client();
-  oauth2Client.setCredentials({ access_token: accessToken });
-  const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
-  const response = await oauth2.userinfo.get();
-  return response.data;
-}
-
 export interface GmailAttachmentDetails {
   filename: string;
   mimeType: string;
@@ -269,33 +239,90 @@ export async function archiveEmail(refreshToken: string, id: string): Promise<vo
   });
 }
 
+export function getAuthUrl() {
+  const oauth2Client = getOAuth2Client();
+  const scopes = [
+    'openid',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/calendar.events'
+  ];
+  return oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: scopes
+  });
+}
+
+export async function exchangeCodeForTokens(code: string) {
+  const oauth2Client = getOAuth2Client();
+  const { tokens } = await oauth2Client.getToken(code);
+  return tokens;
+}
+
+export async function getUserInfo(accessToken: string) {
+  const oauth2Client = getOAuth2Client();
+  oauth2Client.setCredentials({ access_token: accessToken });
+  const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+  const response = await oauth2.userinfo.get();
+  return response.data;
+}
+
 export async function replyToEmail(
   refreshToken: string,
   originalGmailId: string,
-  replyBody: string
+  replyBody: string,
+  fallbackToAddress?: string,
+  fallbackSubject?: string
 ): Promise<any> {
   const oauth2Client = getOAuth2Client();
   oauth2Client.setCredentials({ refresh_token: refreshToken });
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-  const original = await gmail.users.messages.get({
-    userId: 'me',
-    id: originalGmailId,
-    format: 'metadata',
-    metadataHeaders: ['Message-ID', 'Subject', 'From', 'References']
-  });
+  let messageIdHeader = '';
+  let subjectHeader = fallbackSubject || 'Re: Message';
+  let toRecipient = fallbackToAddress || '';
+  let referencesHeader = '';
+  let threadId: string | undefined = undefined;
 
-  const headers = original.data.payload?.headers || [];
-  const messageIdHeader = headers.find(h => h.name?.toLowerCase() === 'message-id')?.value || '';
-  const subjectHeader = headers.find(h => h.name?.toLowerCase() === 'subject')?.value || '';
-  const fromHeader = headers.find(h => h.name?.toLowerCase() === 'from')?.value || '';
-  const referencesHeader = headers.find(h => h.name?.toLowerCase() === 'references')?.value || '';
-  const threadId = original.data.threadId;
+  if (originalGmailId && !originalGmailId.startsWith('test_')) {
+    try {
+      const original = await gmail.users.messages.get({
+        userId: 'me',
+        id: originalGmailId,
+        format: 'metadata',
+        metadataHeaders: ['Message-ID', 'Subject', 'From', 'References']
+      });
 
-  let toRecipient = fromHeader;
-  const match = fromHeader.match(/<([^>]+)>/);
-  if (match) {
-    toRecipient = match[1];
+      const headers = original.data.payload?.headers || [];
+      messageIdHeader = headers.find(h => h.name?.toLowerCase() === 'message-id')?.value || '';
+      subjectHeader = headers.find(h => h.name?.toLowerCase() === 'subject')?.value || subjectHeader;
+      const fromHeader = headers.find(h => h.name?.toLowerCase() === 'from')?.value || '';
+      referencesHeader = headers.find(h => h.name?.toLowerCase() === 'references')?.value || '';
+      threadId = original.data.threadId || undefined;
+
+      if (fromHeader) {
+        toRecipient = fromHeader;
+        const match = fromHeader.match(/<([^>]+)>/);
+        if (match) {
+          toRecipient = match[1];
+        }
+      }
+    } catch (err: any) {
+      console.warn('[Gmail] Could not fetch original message metadata:', err.message);
+    }
+  }
+
+  if (!toRecipient && fallbackToAddress) {
+    toRecipient = fallbackToAddress;
+    const match = fallbackToAddress.match(/<([^>]+)>/);
+    if (match) toRecipient = match[1];
+  }
+
+  if (!toRecipient) {
+    throw new Error('Could not determine recipient email address.');
   }
 
   const cleanSubject = subjectHeader.toLowerCase().startsWith('re:') ? subjectHeader : ('Re: ' + subjectHeader);
@@ -304,8 +331,8 @@ export async function replyToEmail(
   const emailLines = [
     'To: ' + toRecipient,
     'Subject: ' + cleanSubject,
-    'In-Reply-To: ' + messageIdHeader,
-    'References: ' + refs,
+    ...(messageIdHeader ? ['In-Reply-To: ' + messageIdHeader] : []),
+    ...(refs ? ['References: ' + refs] : []),
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: 7bit',
