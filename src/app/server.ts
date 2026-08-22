@@ -885,52 +885,50 @@ app.get('/webhook/whatsapp', (req, res) => {
 });
 
 app.post('/webhook/whatsapp', async (req, res) => {
-  // Respond 200 OK immediately to Meta to prevent retry timeouts
-  res.status(200).send('EVENT_RECEIVED');
-
   try {
     const signature = req.headers['x-hub-signature-256'] as string;
     const metaSecret = env.META_APP_SECRET;
 
-    console.log('[WHATSAPP WEBHOOK] Incoming POST payload:', JSON.stringify(req.body));
-
-    // Cryptographic HMAC SHA-256 signature verification (logged safely)
+    // Cryptographic HMAC SHA-256 signature verification
     if (metaSecret && !metaSecret.includes('replace_me') && metaSecret !== 'your_meta_app_secret' && metaSecret.length >= 10) {
+      if (!signature || !signature.startsWith('sha256=')) {
+        logger.warn({ type: 'WEBHOOK_SECURITY', description: 'WhatsApp webhook rejected: Missing or invalid X-Hub-Signature-256 header format.' });
+        return res.status(401).send('Unauthorized: Signature missing or invalid format.');
+      }
+
       const rawBody = (req as any).rawBody || Buffer.from(JSON.stringify(req.body));
       const expectedSignature = 'sha256=' + crypto.createHmac('sha256', metaSecret).update(rawBody).digest('hex');
 
-      if (signature) {
-        const sigBuffer = Buffer.from(signature);
-        const expectedBuffer = Buffer.from(expectedSignature);
+      const sigBuffer = Buffer.from(signature);
+      const expectedBuffer = Buffer.from(expectedSignature);
 
-        if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
-          logger.warn({ type: 'WEBHOOK_SECURITY', description: `Notice: Webhook signature mismatch: received ${signature} vs expected ${expectedSignature}` });
-        }
+      if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+        logger.warn({ type: 'WEBHOOK_SECURITY', description: `WhatsApp webhook signature mismatch: received ${signature} vs expected ${expectedSignature}` });
+        return res.status(403).send('Forbidden: Invalid HMAC signature.');
       }
     }
 
     const body = req.body;
-    if (!body || !body.entry) return;
+    if (body.object !== 'whatsapp_business_account') return res.sendStatus(404);
 
+    const change = body.entry?.[0]?.changes?.[0]?.value;
+    if (!change || !change.messages || change.messages.length === 0) {
+      return res.status(200).send('EVENT_RECEIVED');
+    }
+
+    const message = change.messages[0];
+    const fromNumber = message.from;
+    const msgText = message.text?.body?.trim() || message.button?.text?.trim() || '';
+    const context = message.context;
+
+    if (!msgText) return res.status(200).send('EVENT_RECEIVED');
+
+    logger.info({ type: 'WHATSAPP_INBOUND', description: `Incoming WhatsApp message from ${fromNumber}: "${msgText}"` });
+
+    const cleanMsg = msgText.toLowerCase().trim();
     const token = env.WHATSAPP_ACCESS_TOKEN;
     const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
-
-    for (const entry of (body.entry || [])) {
-      for (const change of (entry.changes || [])) {
-        if (!change.value || !change.value.messages) continue;
-
-        for (const message of change.value.messages) {
-          const fromNumber = message.from;
-          const msgText = message.text?.body?.trim() || message.button?.text?.trim() || '';
-          const context = message.context;
-
-          if (!msgText || !fromNumber) continue;
-
-          logger.info({ type: 'WHATSAPP_INBOUND', description: `Incoming WhatsApp message from ${fromNumber}: "${msgText}"` });
-          console.log(`[WHATSAPP_INBOUND] Processing message from ${fromNumber}: "${msgText}"`);
-
-          const cleanMsg = msgText.toLowerCase().trim();
-          const cleanNumber = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
+    const cleanNumber = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
 
     // Helper to send text message back to WhatsApp
     const sendWhatsAppReply = async (bodyText: string) => {
@@ -1075,15 +1073,15 @@ app.post('/webhook/whatsapp', async (req, res) => {
         `Or type *help* to see all options.`;
     }
 
-        if (replyStatus) {
-          await sendWhatsAppReply(replyStatus);
-        }
-      }
+    if (replyStatus) {
+      await sendWhatsAppReply(replyStatus);
     }
+
+    res.status(200).send('EVENT_RECEIVED');
+  } catch (err: any) {
+    logger.error({ type: 'WEBHOOK_ERR', description: `WhatsApp webhook execution error: ${err.message}` });
+    res.status(200).send('EVENT_RECEIVED');
   }
-} catch (err: any) {
-  logger.error({ type: 'WEBHOOK_ERR', description: `WhatsApp webhook execution error: ${err.message}` });
-}
 });
 
 app.post('/api/outbox/:id/requeue', authenticateToken, async (req: AuthenticatedRequest, res) => {
