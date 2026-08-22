@@ -30,4 +30,17 @@ describe('Google Pub/Sub OIDC JWT Verification Security Tests', () => {
     assert.strictEqual(res.valid, false);
     assert.match(res.error || '', /verification failed/i);
   });
+
+  test('CRITICAL REGRESSION TEST: Shared-secret string token MUST NOT authenticate', async () => {
+    const sharedSecret = 'mail2whatsapp_secure_webhook_token_2026';
+    const res = await verifyPubSubOidcToken(`Bearer ${sharedSecret}`);
+    assert.strictEqual(res.valid, false, 'Shared secret token must be strictly rejected by OIDC JWT verifier');
+    assert.match(res.error || '', /verification failed/i);
+  });
+
+  test('CRITICAL REGRESSION TEST: Any arbitrary shared secret token is rejected', async () => {
+    const res = await verifyPubSubOidcToken('Bearer test_pubsub_token_2026');
+    assert.strictEqual(res.valid, false);
+    assert.match(res.error || '', /verification failed/i);
+  });
 });

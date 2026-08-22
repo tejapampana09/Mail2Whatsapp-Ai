@@ -24,12 +24,7 @@ export async function verifyPubSubOidcToken(authHeader: string | undefined): Pro
     return { valid: false, error: 'Empty bearer token' };
   }
 
-  // 1. Shared secret verification token bypass/fallback if configured
-  if (env.PUBSUB_VERIFICATION_TOKEN && !env.PUBSUB_VERIFICATION_TOKEN.includes('replace_me') && token === env.PUBSUB_VERIFICATION_TOKEN) {
-    return { valid: true };
-  }
-
-  // 2. Cryptographic Google OIDC JWT Verification
+  // Cryptographic Google OIDC JWT Verification only
   try {
     const audience = env.PUBSUB_AUDIENCE || undefined;
     const ticket = await authClient.verifyIdToken({
@@ -52,7 +47,7 @@ export async function verifyPubSubOidcToken(authHeader: string | undefined): Pro
     // Verify Service Account Identity if configured
     if (env.PUBSUB_SERVICE_ACCOUNT && !env.PUBSUB_SERVICE_ACCOUNT.includes('replace_me')) {
       const email = payload.email;
-      if (email !== env.PUBSUB_SERVICE_ACCOUNT) {
+      if (!email || email !== env.PUBSUB_SERVICE_ACCOUNT) {
         logger.warn({ type: 'PUBSUB_AUTH', description: 'Pub/Sub JWT rejected: Service account mismatch' });
         return { valid: false, error: 'Service account identity mismatch' };
       }

@@ -42,10 +42,9 @@ const envSchema = z.object({
   WHATSAPP_POLL_INTERVAL_MS: z.coerce.number().default(5000),
   WHATSAPP_STALE_TIMEOUT_MS: z.coerce.number().default(180000),
 
-  // Google Pub/Sub Webhook Security
+  // Google Pub/Sub Webhook Security (Cryptographic OIDC JWT Only)
   PUBSUB_AUDIENCE: z.string().optional(),
   PUBSUB_SERVICE_ACCOUNT: z.string().optional(),
-  PUBSUB_VERIFICATION_TOKEN: z.string().optional(),
 
   // Network & Reverse Proxy Topologies
   TRUST_PROXY: z.string().default('false'),
@@ -74,8 +73,7 @@ function parseEnvironment() {
       GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/auth/google/callback',
       WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || 'test_whatsapp_access_token_2026',
       WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '123456789012345',
-      META_APP_SECRET: process.env.META_APP_SECRET || 'test_meta_app_secret_2026',
-      PUBSUB_VERIFICATION_TOKEN: process.env.PUBSUB_VERIFICATION_TOKEN || 'test_pubsub_token_2026'
+      META_APP_SECRET: process.env.META_APP_SECRET || 'test_meta_app_secret_2026'
     });
   }
 
