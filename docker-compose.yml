@@ -16,7 +16,7 @@ services:
     volumes:
       - ./mail2whatsapp.db:/app/mail2whatsapp.db
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health/live"]
       interval: 30s
       timeout: 5s
       retries: 3
