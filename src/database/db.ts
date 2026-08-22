@@ -450,6 +450,9 @@ export async function initDb(): Promise<any> {
   ensureColumn('settings', 'analyze_limit', 'INTEGER DEFAULT 10');
   ensureColumn('settings', 'ai_provider', 'TEXT DEFAULT "google"');
 
+  // 5. Migrate emails table
+  ensureColumn('emails', 'created_at', 'TEXT DEFAULT ""');
+
   return db;
 }
 
@@ -1184,7 +1187,7 @@ export async function getUserIdByWhatsAppNumber(whatsappNumber: string): Promise
 
 export async function getLatestEmail(userId: string): Promise<any | null> {
   const database = await getDb();
-  const stmt = database.prepare('SELECT * FROM emails WHERE user_id = ? ORDER BY created_at DESC LIMIT 1');
+  const stmt = database.prepare('SELECT * FROM emails WHERE user_id = ? ORDER BY rowid DESC LIMIT 1');
   const row = stmt.get(userId) as any;
   if (!row) return null;
   return {

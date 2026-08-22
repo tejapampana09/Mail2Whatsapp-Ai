@@ -923,70 +923,122 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     if (!msgText) return res.status(200).send('EVENT_RECEIVED');
 
-    let emailRow: any = null;
-    if (context && context.id) {
-      emailRow = await getEmailByWhatsAppMessageId(context.id);
-      if (emailRow) {
-        // Enforce phone authorization check: sender must own this email
-        const userSettings = await getSettings(emailRow.user_id);
-        const cleanFrom = fromNumber.replace(/[^\d]/g, '');
-        const cleanSetting = (userSettings?.whatsapp_number || '').replace(/[^\d]/g, '');
-        if (!cleanSetting || cleanFrom.slice(-10) !== cleanSetting.slice(-10)) {
-          logger.warn({ type: 'WEBHOOK_AUTH', description: `Unauthorized WhatsApp reply attempt for user ${emailRow.user_id} from ${fromNumber}. Blocked.` });
-          return res.status(200).send('EVENT_RECEIVED');
-        }
-      }
-    } else {
-      const cleanMsg = msgText.toLowerCase();
-      const isCommand = msgText.startsWith('/reply ') || cleanMsg === '/read' || cleanMsg === '/archive' || cleanMsg === '/summary';
-      if (isCommand) {
-        const userId = await getUserIdByWhatsAppNumber(fromNumber);
-        if (userId) emailRow = await getLatestEmail(userId);
-      }
-    }
+    logger.info({ type: 'WHATSAPP_INBOUND', description: `Incoming WhatsApp message from ${fromNumber}: "${msgText}"` });
 
-    if (!emailRow) return res.status(200).send('EVENT_RECEIVED');
-
-    const userId = emailRow.user_id;
-    const tokenRow = await getOAuthToken(userId, 'google');
-    if (!tokenRow || !tokenRow.refresh_token) return res.status(200).send('EVENT_RECEIVED');
-
-    const decryptedRefreshToken = tokenRow.refresh_token;
-    const cleanMsg = msgText.toLowerCase();
+    const cleanMsg = msgText.toLowerCase().trim();
     const token = env.WHATSAPP_ACCESS_TOKEN;
     const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
     const cleanNumber = fromNumber.startsWith('+') ? fromNumber : `+${fromNumber}`;
-    let replyStatus = '';
 
-    if (msgText.startsWith('/reply ')) {
-      const replyContent = msgText.substring(7).trim();
-      if (replyContent) {
-        await replyToEmail(decryptedRefreshToken, emailRow.gmail_message_id, replyContent);
-        replyStatus = `✅ *Reply Sent successfully!* \n\n📨 *To:* ${emailRow.from_address}\n📝 *Message:* "${replyContent}"`;
+    // Helper to send text message back to WhatsApp
+    const sendWhatsAppReply = async (bodyText: string) => {
+      if (!token || !phoneId) return;
+      try {
+        await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: cleanNumber,
+            type: 'text',
+            text: { preview_url: false, body: bodyText }
+          })
+        });
+      } catch (err: any) {
+        logger.error({ type: 'WHATSAPP_REPLY_ERR', description: `Failed sending WhatsApp reply: ${err.message}` });
       }
-    } else if (cleanMsg === '/read') {
-      await markEmailAsRead(decryptedRefreshToken, emailRow.gmail_message_id);
-      await updateEmailReadStatus(emailRow.id, true);
-      replyStatus = `✉️ *Email marked as read.*`;
-    } else if (cleanMsg === '/archive') {
-      await archiveEmail(decryptedRefreshToken, emailRow.gmail_message_id);
-      replyStatus = `📥 *Email archived.*`;
-    } else if (cleanMsg === '/summary') {
-      replyStatus = `💡 *AI Summary:*\n${emailRow.summary}`;
+    };
+
+    // 1. Resolve linked user by phone number
+    const userId = await getUserIdByWhatsAppNumber(fromNumber);
+    if (!userId) {
+      logger.warn({ type: 'WEBHOOK_AUTH', description: `Sender phone ${fromNumber} not linked to any user in settings.` });
+      await sendWhatsAppReply(
+        `⚠️ *Phone Number Not Linked*\n\nYour WhatsApp number (${fromNumber}) is not configured in Mail2WhatsApp Settings.\nPlease log in to https://whatsapp2mail.duckdns.org and save your WhatsApp number in Settings.`
+      );
+      return res.status(200).send('EVENT_RECEIVED');
     }
 
-    if (replyStatus && token && phoneId) {
-      await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          recipient_type: 'individual',
-          to: cleanNumber,
-          type: 'text',
-          text: { preview_url: false, body: replyStatus }
-        })
-      });
+    // 2. Handle Greeting & Help Commands
+    if (cleanMsg === 'hi' || cleanMsg === 'hello' || cleanMsg === 'help' || cleanMsg === '/help' || cleanMsg === '/start' || cleanMsg === 'menu') {
+      const helpMenu =
+        `👋 *Mail2WhatsApp Assistant*\n` +
+        `━━━━━━━━━━━━━━━━━━━━━\n` +
+        `Here are the commands you can use:\n\n` +
+        `💡 */summary* — Get latest email AI summary\n` +
+        `✉️ */read* — Mark latest email as read\n` +
+        `📥 */archive* — Archive latest email in Gmail\n` +
+        `✍️ */reply <your text>* — Send Gmail reply to sender\n\n` +
+        `_💡 You can also reply directly to any incoming email alert!_`;
+
+      await sendWhatsAppReply(helpMenu);
+      return res.status(200).send('EVENT_RECEIVED');
+    }
+
+    // 3. Resolve Target Email (via context ID or latest email)
+    let emailRow: any = null;
+    if (context && context.id) {
+      emailRow = await getEmailByWhatsAppMessageId(context.id);
+    }
+    if (!emailRow) {
+      emailRow = await getLatestEmail(userId);
+    }
+
+    if (!emailRow) {
+      await sendWhatsAppReply(
+        `📭 *No Emails Found*\n\nNo recent email alerts found in your inbox history yet. Send a test email to your connected Gmail to get started!`
+      );
+      return res.status(200).send('EVENT_RECEIVED');
+    }
+
+    // 4. Resolve Google Token for Gmail actions
+    const tokenRow = await getOAuthToken(userId, 'google');
+    const decryptedRefreshToken = tokenRow?.refresh_token;
+
+    let replyStatus = '';
+    const isReplyCommand = msgText.toLowerCase().startsWith('/reply ') || msgText.toLowerCase().startsWith('reply ');
+    const isReadCommand = cleanMsg === '/read' || cleanMsg === 'read';
+    const isArchiveCommand = cleanMsg === '/archive' || cleanMsg === 'archive';
+    const isSummaryCommand = cleanMsg === '/summary' || cleanMsg === 'summary';
+
+    if (isReplyCommand) {
+      const replyContent = msgText.replace(/^(\/reply|reply)\s+/i, '').trim();
+      if (replyContent && decryptedRefreshToken && emailRow.gmail_message_id) {
+        await replyToEmail(decryptedRefreshToken, emailRow.gmail_message_id, replyContent);
+        replyStatus = `✅ *Reply Sent successfully!* \n\n📨 *To:* ${emailRow.from_address}\n📝 *Message:* "${replyContent}"`;
+      } else if (!decryptedRefreshToken) {
+        replyStatus = `⚠️ *Gmail account not linked or needs reconnection.*`;
+      } else {
+        replyStatus = `⚠️ *Please provide a message body:* e.g. \`/reply Thanks, will review soon!\``;
+      }
+    } else if (isReadCommand) {
+      if (decryptedRefreshToken && emailRow.gmail_message_id) {
+        await markEmailAsRead(decryptedRefreshToken, emailRow.gmail_message_id);
+        await updateEmailReadStatus(emailRow.id, true);
+        replyStatus = `✉️ *Email marked as read in Gmail.*`;
+      } else {
+        replyStatus = `✉️ *Email marked as read.*`;
+      }
+    } else if (isArchiveCommand) {
+      if (decryptedRefreshToken && emailRow.gmail_message_id) {
+        await archiveEmail(decryptedRefreshToken, emailRow.gmail_message_id);
+        replyStatus = `📥 *Email archived in Gmail.*`;
+      } else {
+        replyStatus = `📥 *Email archived.*`;
+      }
+    } else if (isSummaryCommand) {
+      replyStatus = `💡 *Latest Email Summary:*\n━━━━━━━━━━━━━━━━━━━━━\n📨 *From:* ${emailRow.from_address}\n📌 *Subject:* ${emailRow.subject}\n🏷️ *Priority:* ${emailRow.importance}\n\n📝 *Summary:* ${emailRow.summary}`;
+    } else {
+      replyStatus =
+        `💡 *Command Not Recognized*\n\n` +
+        `You said: "${msgText}"\n\n` +
+        `Send */summary*, */read*, */archive*, or */reply <your text>*.\n` +
+        `Or type *help* to see all options.`;
+    }
+
+    if (replyStatus) {
+      await sendWhatsAppReply(replyStatus);
     }
 
     res.status(200).send('EVENT_RECEIVED');
