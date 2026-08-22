@@ -1,6 +1,6 @@
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
-import { initDb, upsertUser, createEmailEvent, createOutboxJob, getDb } from '../../db';
+import { initDb, upsertUser, createEmailEvent, createOutboxJob, claimOutboxJob, getDb } from '../../db';
 
 describe('High-Concurrency Soak & 100x Duplicate-Event Deduplication Tests', () => {
   const soakUserId = 'soak_test_user_prime';
@@ -48,7 +48,7 @@ describe('High-Concurrency Soak & 100x Duplicate-Event Deduplication Tests', () 
     }
   });
 
-  test('100 duplicate WhatsApp outbox creation requests produce exactly 1 outbox record', async () => {
+  test('100 concurrent duplicate WhatsApp outbox creation requests result in exactly 1 logical outbox record', async () => {
     const emailEventId = 'evt_soak_dedup_' + Date.now();
     const idempotencyKey = 'whatsapp:' + soakUserId + ':' + emailEventId;
 
@@ -71,12 +71,36 @@ describe('High-Concurrency Soak & 100x Duplicate-Event Deduplication Tests', () 
     const nonDuplicates = outboxResults.filter(r => !r.isDuplicate);
     const duplicates = outboxResults.filter(r => r.isDuplicate);
 
-    assert.strictEqual(nonDuplicates.length, 1, 'Exactly 1 outbox record created');
+    assert.strictEqual(nonDuplicates.length, 1, 'Exactly 1 logical outbox record created');
     assert.strictEqual(duplicates.length, 99, '99 outbox creation calls deduplicated');
 
     const primaryOutboxId = nonDuplicates[0].id;
     for (const res of outboxResults) {
       assert.strictEqual(res.id, primaryOutboxId);
     }
+  });
+
+  test('Concurrent worker lease claiming on single job allows only 1 authoritative worker to dispatch', async () => {
+    const emailEventId = 'evt_claim_dedup_' + Date.now();
+    const idempotencyKey = 'whatsapp:' + soakUserId + ':' + emailEventId;
+
+    const { id } = await createOutboxJob({
+      userId: soakUserId,
+      emailEventId,
+      phoneNumber: '+919876543210',
+      messageType: 'TEMPLATE_NOTIFICATION',
+      payload: { template: 'alert_v1' },
+      idempotencyKey
+    });
+
+    // 20 concurrent workers try to claim the same outbox job
+    const claimPromises: Promise<boolean>[] = [];
+    for (let i = 0; i < 20; i++) {
+      claimPromises.push(claimOutboxJob(id, `worker_cluster_node_${i}`, 60000));
+    }
+
+    const claimResults = await Promise.all(claimPromises);
+    const successfulClaims = claimResults.filter(c => c === true);
+    assert.strictEqual(successfulClaims.length, 1, 'Only 1 worker in cluster successfully acquires the lease');
   });
 });

@@ -36,8 +36,15 @@ const envSchema = z.object({
   WHATSAPP_VOICE_ENABLED: z.string().default('false'),
   TTS_PROVIDER: z.enum(['none', 'openai', 'google']).default('none'),
 
+  // WhatsApp Outbox Worker & Retry Configurations
+  WHATSAPP_MAX_RETRIES: z.coerce.number().default(6),
+  WHATSAPP_BATCH_SIZE: z.coerce.number().default(10),
+  WHATSAPP_POLL_INTERVAL_MS: z.coerce.number().default(5000),
+  WHATSAPP_STALE_TIMEOUT_MS: z.coerce.number().default(180000),
+
   // Google Pub/Sub Webhook Security
   PUBSUB_AUDIENCE: z.string().optional(),
+  PUBSUB_SERVICE_ACCOUNT: z.string().optional(),
   PUBSUB_VERIFICATION_TOKEN: z.string().optional(),
 
   // Network & Reverse Proxy Topologies

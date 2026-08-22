@@ -117,10 +117,24 @@ class MemoryDatabaseMock {
         }
 
         if (lowerSql.includes("update whatsapp_outbox") && lowerSql.includes("set status = 'processing'")) {
-          const targetId = args[1];
-          const target = list.find(x => x.id === targetId && x.status === 'PENDING');
+          const targetId = args.find(a => typeof a === 'string' && a.startsWith('outbox_')) || args[3] || args[1];
+          const target = list.find(x => x.id === targetId && (x.status === 'PENDING' || (x.status === 'PROCESSING' && (x.lease_expires_at || 0) < Date.now())));
           if (target) {
             target.status = 'PROCESSING';
+            target.locked_by = args[0];
+            target.lease_expires_at = args[1] || (Date.now() + 60000);
+            return { changes: 1 };
+          }
+          return { changes: 0 };
+        }
+
+        if (lowerSql.includes("update whatsapp_outbox") && lowerSql.includes("where id = ? and status = 'dead_letter'")) {
+          const targetId = args[2] || args[0];
+          const target = list.find(x => x.id === targetId && x.status === 'DEAD_LETTER');
+          if (target) {
+            target.status = 'PENDING';
+            target.attempt_count = 0;
+            target.last_error = null;
             return { changes: 1 };
           }
           return { changes: 0 };
@@ -128,7 +142,11 @@ class MemoryDatabaseMock {
 
         if (lowerSql.includes("update whatsapp_outbox") && lowerSql.includes("set status = 'pending'")) {
           const targets = list.filter(x => x.status === 'PROCESSING');
-          targets.forEach(x => x.status = 'PENDING');
+          targets.forEach(x => {
+            x.status = 'PENDING';
+            x.locked_by = null;
+            x.lease_expires_at = 0;
+          });
           return { changes: targets.length };
         }
 
@@ -340,6 +358,8 @@ export async function initDb(): Promise<any> {
       status TEXT NOT NULL DEFAULT 'PENDING',
       attempt_count INTEGER DEFAULT 0,
       next_attempt_at INTEGER DEFAULT 0,
+      lease_expires_at INTEGER DEFAULT 0,
+      locked_by TEXT,
       last_error TEXT,
       provider_message_id TEXT,
       idempotency_key TEXT UNIQUE NOT NULL,
@@ -352,7 +372,7 @@ export async function initDb(): Promise<any> {
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_outbox_poll
-    ON whatsapp_outbox(status, next_attempt_at)
+    ON whatsapp_outbox(status, next_attempt_at, lease_expires_at)
   `);
 
   // 6. Sync State Table
@@ -786,6 +806,8 @@ export interface OutboxJob {
   status: 'PENDING' | 'PROCESSING' | 'SENT' | 'FAILED' | 'DEAD_LETTER' | 'CANCELLED';
   attempt_count: number;
   next_attempt_at: number;
+  lease_expires_at?: number;
+  locked_by?: string;
   last_error?: string;
   provider_message_id?: string;
   idempotency_key: string;
@@ -816,8 +838,8 @@ export async function createOutboxJob(job: {
 
   try {
     const stmt = database.prepare(
-      `INSERT INTO whatsapp_outbox (id, user_id, email_event_id, phone_number, message_type, template_name, payload, status, attempt_count, next_attempt_at, idempotency_key, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, ?, ?, ?)`
+      `INSERT INTO whatsapp_outbox (id, user_id, email_event_id, phone_number, message_type, template_name, payload, status, attempt_count, next_attempt_at, lease_expires_at, locked_by, idempotency_key, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, 0, NULL, ?, ?, ?)`
     );
     stmt.run(
       id,
@@ -854,15 +876,25 @@ export async function getPendingOutboxJobs(limit = 10): Promise<OutboxJob[]> {
   return stmt.all(now, limit) as OutboxJob[];
 }
 
-export async function claimOutboxJob(id: string): Promise<boolean> {
+export async function claimOutboxJob(
+  id: string,
+  workerId = 'worker_' + process.pid,
+  leaseDurationMs = 60000
+): Promise<boolean> {
   const database = await getDb();
   const now = new Date().toISOString();
+  const leaseExpiresAt = Date.now() + leaseDurationMs;
+  const nowTimestamp = Date.now();
+
   const stmt = database.prepare(
     `UPDATE whatsapp_outbox
-     SET status = 'PROCESSING', updated_at = ?
-     WHERE id = ? AND status = 'PENDING'`
+     SET status = 'PROCESSING',
+         locked_by = ?,
+         lease_expires_at = ?,
+         updated_at = ?
+     WHERE id = ? AND (status = 'PENDING' OR (status = 'PROCESSING' AND lease_expires_at < ?))`
   );
-  const result = stmt.run(now, id);
+  const result = stmt.run(workerId, leaseExpiresAt, now, id, nowTimestamp);
   return result.changes > 0;
 }
 
@@ -887,6 +919,8 @@ export async function updateOutboxJobStatus(
          next_attempt_at = COALESCE(?, next_attempt_at),
          last_error = COALESCE(?, last_error),
          provider_message_id = COALESCE(?, provider_message_id),
+         lease_expires_at = 0,
+         locked_by = NULL,
          sent_at = COALESCE(?, sent_at),
          updated_at = ?
      WHERE id = ?`
@@ -903,17 +937,56 @@ export async function updateOutboxJobStatus(
   );
 }
 
-export async function resetStaleOutboxJobs(timeoutMs = 5 * 60 * 1000): Promise<number> {
+export async function resetStaleOutboxJobs(timeoutMs = 3 * 60 * 1000): Promise<number> {
   const database = await getDb();
-  const staleThreshold = new Date(Date.now() - timeoutMs).toISOString();
   const now = new Date().toISOString();
+  const nowTimestamp = Date.now();
+  const staleThreshold = new Date(Date.now() - timeoutMs).toISOString();
+
   const stmt = database.prepare(
     `UPDATE whatsapp_outbox
-     SET status = 'PENDING', updated_at = ?
-     WHERE status = 'PROCESSING' AND updated_at <= ?`
+     SET status = 'PENDING', locked_by = NULL, lease_expires_at = 0, updated_at = ?
+     WHERE status = 'PROCESSING' AND (lease_expires_at < ? OR updated_at <= ?)`
   );
-  const result = stmt.run(now, staleThreshold);
+  const result = stmt.run(now, nowTimestamp, staleThreshold);
   return result.changes;
+}
+
+export async function requeueDeadLetterJob(id: string): Promise<boolean> {
+  const database = await getDb();
+  const now = new Date().toISOString();
+  const nextAttemptAt = Date.now();
+
+  const stmt = database.prepare(
+    `UPDATE whatsapp_outbox
+     SET status = 'PENDING',
+         attempt_count = 0,
+         next_attempt_at = ?,
+         last_error = NULL,
+         locked_by = NULL,
+         lease_expires_at = 0,
+         updated_at = ?
+     WHERE id = ? AND status = 'DEAD_LETTER'`
+  );
+  const result = stmt.run(nextAttemptAt, now, id);
+  return result.changes > 0;
+}
+
+export async function getOutboxStats(): Promise<{ pending: number; processing: number; sent: number; deadLetter: number; failed: number }> {
+  const database = await getDb();
+  const rows = database.prepare(
+    `SELECT status, COUNT(*) as count FROM whatsapp_outbox GROUP BY status`
+  ).all() as { status: string; count: number }[];
+
+  const stats = { pending: 0, processing: 0, sent: 0, deadLetter: 0, failed: 0 };
+  for (const r of rows) {
+    if (r.status === 'PENDING') stats.pending = r.count;
+    else if (r.status === 'PROCESSING') stats.processing = r.count;
+    else if (r.status === 'SENT') stats.sent = r.count;
+    else if (r.status === 'DEAD_LETTER') stats.deadLetter = r.count;
+    else if (r.status === 'FAILED') stats.failed = r.count;
+  }
+  return stats;
 }
 
 // Sync State DB Methods

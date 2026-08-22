@@ -12,6 +12,7 @@ import logger from './logger.service';
 import { requestIdMiddleware } from './middleware/request-id.middleware';
 import { metricsService } from './services/metrics.service';
 import { initQueues, closeQueues } from './services/queue.service';
+import { verifyPubSubOidcToken } from './services/pubsub-auth.service';
 
 import {
   initDb,
@@ -42,7 +43,8 @@ import {
   getLatestEmail,
   createEmailEvent,
   updateEmailEventStatus,
-  updateSyncState
+  updateSyncState,
+  requeueDeadLetterJob
 } from './db';
 
 import {
@@ -290,13 +292,13 @@ app.get('/health', (_req, res) => {
   });
 });
 
-app.get('/metrics', (req, res) => {
+app.get('/metrics', async (req, res) => {
   const format = req.query.format;
   if (format === 'json') {
-    res.json(metricsService.getMetricsJSON());
+    res.json(await metricsService.getMetricsJSON());
   } else {
-    res.setHeader('Content-Type', 'text/plain; version=0.0.4');
-    res.send(metricsService.getPrometheusFormat());
+    res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+    res.send(await metricsService.getPrometheusFormat());
   }
 });
 
@@ -1080,19 +1082,29 @@ app.post('/webhook/whatsapp', async (req, res) => {
   }
 });
 
+app.post('/api/outbox/:id/requeue', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { id } = req.params;
+    const success = await requeueDeadLetterJob(id);
+    if (!success) {
+      return res.status(404).json({ error: 'Outbox job not found or not in DEAD_LETTER state.' });
+    }
+    await addLog(req.user!.id, 'INFO', 'OUTBOX_REQUEUE', `Dead letter outbox job ${id} manually requeued.`);
+    res.json({ success: true, message: `Job ${id} requeued to PENDING.` });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/webhook/gmail', async (req, res) => {
   try {
+    metricsService.increment('pubsub_received_total');
     const authHeader = req.headers['authorization'] as string;
-    const tokenQuery = req.query.token as string || req.headers['x-pubsub-verification-token'] as string;
+    const verification = await verifyPubSubOidcToken(authHeader);
 
-    // Secure PubSub verification if token configured
-    if (env.PUBSUB_VERIFICATION_TOKEN && !env.PUBSUB_VERIFICATION_TOKEN.includes('replace_me')) {
-      const isBearer = typeof authHeader === 'string' && authHeader.startsWith('Bearer ');
-      const isTokenMatch = tokenQuery === env.PUBSUB_VERIFICATION_TOKEN;
-      if (!isBearer && !isTokenMatch) {
-        logger.warn({ type: 'PUBSUB_AUTH', description: 'Unauthorized Gmail Pub/Sub webhook trigger attempt rejected.' });
-        return res.status(401).send('Unauthorized PubSub webhook');
-      }
+    if (!verification.valid) {
+      logger.warn({ type: 'PUBSUB_AUTH', description: `Gmail Pub/Sub webhook rejected: ${verification.error}` });
+      return res.status(401).send('Unauthorized PubSub webhook');
     }
 
     const body = req.body;

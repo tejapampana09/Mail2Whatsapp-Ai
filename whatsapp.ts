@@ -1,4 +1,5 @@
 import { env } from './config/env.config';
+import { metricsService } from './services/metrics.service';
 import {
   createOutboxJob,
   getPendingOutboxJobs,
@@ -250,48 +251,25 @@ export async function sendWhatsAppAlert(
     payload.text = { preview_url: false, body: messageText };
   }
 
-  const idempotencyKey = 'whatsapp:' + (options?.userId || 'system') + ':' + (options?.emailEventId || Date.now());
+  const userId = options?.userId || 'system';
+  const idempotencyKey = 'whatsapp:' + userId + ':' + (options?.emailEventId || ('manual_' + Date.now()));
 
-  if (options?.userId) {
-    const outboxRecord = await createOutboxJob({
-      userId: options.userId,
-      emailEventId: options.emailEventId,
-      phoneNumber: cleanNumber,
-      messageType,
-      templateName: templateName || undefined,
-      payload,
-      idempotencyKey
-    });
+  const outboxRecord = await createOutboxJob({
+    userId,
+    emailEventId: options?.emailEventId,
+    phoneNumber: cleanNumber,
+    messageType,
+    templateName: templateName || undefined,
+    payload,
+    idempotencyKey
+  });
 
-    if (outboxRecord.isDuplicate) {
-      console.log(`[WhatsApp] Event ${options.emailEventId} already queued in outbox (idempotency key: ${idempotencyKey}). Preventing duplicate send.`);
-      return { status: 'Sent' };
-    }
+  if (outboxRecord.isDuplicate) {
+    console.log(`[WhatsApp] Event ${options?.emailEventId || 'alert'} already queued in outbox (idempotency key: ${idempotencyKey}). Duplicate suppressed.`);
+    return { status: 'Sent' };
   }
 
-  let result = await executeMetaGraphDispatch(payload);
-  
-  // If template fails due to parameter count mismatch (#132018) or not found (#132001), automatically fallback to rich text
-  if (!result.success && templateName && (result.error?.includes('132018') || result.error?.includes('132001') || result.error?.includes('template') || result.error?.includes('Template'))) {
-    console.warn(`[WhatsApp] Template "${templateName}" failed (${result.error}). Attempting automatic rich text fallback...`);
-    const fallbackPayload = {
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: cleanNumber,
-      type: 'text',
-      text: { preview_url: false, body: messageText }
-    };
-    const fallbackResult = await executeMetaGraphDispatch(fallbackPayload);
-    if (fallbackResult.success) {
-      return { status: 'Sent', messageId: fallbackResult.messageId };
-    }
-  }
-
-  if (result.success) {
-    return { status: 'Sent', messageId: result.messageId };
-  }
-
-  return { status: 'Failed', error: result.error };
+  return { status: 'Sent' };
 }
 
 export async function sendWhatsAppDigest(
@@ -317,6 +295,8 @@ export async function sendWhatsAppDigest(
   const top3Str = stats.topSubjects.length > 0
     ? stats.topSubjects.map((s, i) => (i + 1) + '. ' + sanitizeWhatsAppParam(s, 45)).join(' | ')
     : 'None';
+
+  let messageType: 'TEMPLATE_NOTIFICATION' | 'SESSION_MESSAGE' | 'DIGEST' = 'DIGEST';
 
   if (digestTemplateName) {
     payload.type = 'template';
@@ -351,9 +331,19 @@ export async function sendWhatsAppDigest(
     payload.text = { preview_url: false, body };
   }
 
-  const result = await executeMetaGraphDispatch(payload);
-  if (result.success) return { status: 'Sent', messageId: result.messageId };
-  return { status: 'Failed', error: result.error };
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const idempotencyKey = 'digest:' + cleanNumber + ':' + todayKey;
+
+  await createOutboxJob({
+    userId: 'system',
+    phoneNumber: cleanNumber,
+    messageType,
+    templateName: digestTemplateName || undefined,
+    payload,
+    idempotencyKey
+  });
+
+  return { status: 'Sent' };
 }
 
 export async function sendWhatsAppVoiceSummary(
@@ -372,26 +362,18 @@ export async function sendWhatsAppVoiceSummary(
 // ----------------------------------------------------
 // Persistent Outbox Background Processing Worker
 // ----------------------------------------------------
-const RETRY_BACKOFF_DELAYS = [
-  5 * 1000,        // Attempt 1: 5s
-  15 * 1000,       // Attempt 2: 15s
-  30 * 1000,       // Attempt 3: 30s
-  60 * 1000,       // Attempt 4: 1m
-  5 * 60 * 1000,   // Attempt 5: 5m
-  15 * 60 * 1000   // Attempt 6: 15m
-];
-
 export async function processOutboxBatch(): Promise<{ processed: number; sent: number; retried: number; failed: number }> {
-  await resetStaleOutboxJobs(3 * 60 * 1000);
+  await resetStaleOutboxJobs(env.WHATSAPP_STALE_TIMEOUT_MS);
 
-  const pendingJobs = await getPendingOutboxJobs(10);
+  const pendingJobs = await getPendingOutboxJobs(env.WHATSAPP_BATCH_SIZE);
   let processed = 0;
   let sent = 0;
   let retried = 0;
   let failed = 0;
+  const workerId = 'worker_' + process.pid + '_' + Date.now();
 
   for (const job of pendingJobs) {
-    const claimed = await claimOutboxJob(job.id);
+    const claimed = await claimOutboxJob(job.id, workerId, 60000);
     if (!claimed) continue;
 
     processed++;
@@ -404,7 +386,9 @@ export async function processOutboxBatch(): Promise<{ processed: number; sent: n
       continue;
     }
 
+    const startTime = Date.now();
     let dispatchResult = await executeMetaGraphDispatch(payload);
+    metricsService.recordLatency(Date.now() - startTime);
 
     if (!dispatchResult.success && payload.type === 'template' && (dispatchResult.error?.includes('132018') || dispatchResult.error?.includes('132001'))) {
       const fallbackText = payload.template?.components?.[0]?.parameters?.[4]?.text || 'Urgent Email Notification';
@@ -422,13 +406,15 @@ export async function processOutboxBatch(): Promise<{ processed: number; sent: n
       await updateOutboxJobStatus(job.id, 'SENT', {
         providerMessageId: dispatchResult.messageId
       });
+      metricsService.increment('whatsapp_sent_total');
       sent++;
     } else {
       const nextAttemptCount = job.attempt_count + 1;
       const isTransient = dispatchResult.isTransient !== false;
 
-      if (isTransient && nextAttemptCount <= RETRY_BACKOFF_DELAYS.length) {
-        const baseDelay = RETRY_BACKOFF_DELAYS[nextAttemptCount - 1] || 15 * 60 * 1000;
+      if (isTransient && nextAttemptCount <= env.WHATSAPP_MAX_RETRIES) {
+        // Exponential backoff with randomized jitter: delay = min(MAX_BACKOFF, BASE_BACKOFF * 2^attempt) + jitter
+        const baseDelay = Math.min(15 * 60 * 1000, 5000 * Math.pow(2, nextAttemptCount - 1));
         const jitter = Math.floor(baseDelay * (0.8 + Math.random() * 0.4));
         const nextAttemptAt = Date.now() + jitter;
 
@@ -437,12 +423,14 @@ export async function processOutboxBatch(): Promise<{ processed: number; sent: n
           nextAttemptAt,
           lastError: dispatchResult.error
         });
+        metricsService.increment('whatsapp_retry_total');
         retried++;
       } else {
         await updateOutboxJobStatus(job.id, 'DEAD_LETTER', {
           attemptCount: nextAttemptCount,
           lastError: dispatchResult.error
         });
+        metricsService.increment('whatsapp_failed_total');
         failed++;
       }
     }
@@ -455,13 +443,16 @@ let outboxInterval: NodeJS.Timeout | null = null;
 
 export function startOutboxWorker() {
   if (outboxInterval) return;
+  // Startup stale recovery
+  resetStaleOutboxJobs(env.WHATSAPP_STALE_TIMEOUT_MS).catch(() => {});
+  
   outboxInterval = setInterval(async () => {
     try {
       await processOutboxBatch();
     } catch (err: any) {
       console.error('[Outbox Worker] Batch processing exception:', err.message);
     }
-  }, 15000);
+  }, env.WHATSAPP_POLL_INTERVAL_MS);
   console.log('Persistent WhatsApp Outbox Worker activated.');
 }
 
