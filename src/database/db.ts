@@ -492,13 +492,18 @@ export async function upsertUser(user: { id: string; email: string; name: string
   return await getUser(user.id);
 }
 
-// OAuth Tokens DB Methods
 export async function getOAuthToken(userId: string, provider = 'google') {
   const database = await getDb();
-  const stmt = database.prepare(
+  let token: any = database.prepare(
     'SELECT * FROM oauth_tokens WHERE user_id = ? AND provider = ? AND gmail_email IS NULL'
-  );
-  const token: any = stmt.get(userId, provider);
+  ).get(userId, provider);
+
+  if (!token) {
+    token = database.prepare(
+      'SELECT * FROM oauth_tokens WHERE user_id = ? AND provider = ? AND status = "ACTIVE" ORDER BY rowid ASC LIMIT 1'
+    ).get(userId, provider);
+  }
+
   if (token && token.refresh_token) {
     token.refresh_token = decryptText(token.refresh_token);
   }

@@ -1019,26 +1019,41 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     if (isReplyCommand) {
       const replyContent = msgText.replace(/^(\/reply|reply)\s+/i, '').trim();
-      if (replyContent && decryptedRefreshToken && emailRow.gmail_message_id) {
-        await replyToEmail(decryptedRefreshToken, emailRow.gmail_message_id, replyContent);
-        replyStatus = `✅ *Reply Sent successfully!* \n\n📨 *To:* ${emailRow.from_address}\n📝 *Message:* "${replyContent}"`;
+      if (!replyContent) {
+        replyStatus = `⚠️ *Please provide a message body:* e.g. \`/reply Thanks, will review soon!\``;
       } else if (!decryptedRefreshToken) {
         replyStatus = `⚠️ *Gmail account not linked or needs reconnection.*`;
+      } else if (!emailRow.gmail_message_id) {
+        replyStatus = `⚠️ *Could not locate message ID for this email.*`;
       } else {
-        replyStatus = `⚠️ *Please provide a message body:* e.g. \`/reply Thanks, will review soon!\``;
+        try {
+          await replyToEmail(decryptedRefreshToken, emailRow.gmail_message_id, replyContent);
+          replyStatus = `✅ *Reply Sent successfully!* \n\n📨 *To:* ${emailRow.from_address}\n📝 *Message:* "${replyContent}"`;
+        } catch (replyErr: any) {
+          logger.error({ type: 'GMAIL_REPLY_ERR', description: `Gmail reply API error: ${replyErr.message}` });
+          replyStatus = `❌ *Failed to send Gmail reply:* ${replyErr.message}`;
+        }
       }
     } else if (isReadCommand) {
       if (decryptedRefreshToken && emailRow.gmail_message_id) {
-        await markEmailAsRead(decryptedRefreshToken, emailRow.gmail_message_id);
-        await updateEmailReadStatus(emailRow.id, true);
-        replyStatus = `✉️ *Email marked as read in Gmail.*`;
+        try {
+          await markEmailAsRead(decryptedRefreshToken, emailRow.gmail_message_id);
+          await updateEmailReadStatus(emailRow.id, true);
+          replyStatus = `✉️ *Email marked as read in Gmail.*`;
+        } catch (readErr: any) {
+          replyStatus = `❌ *Failed to mark as read:* ${readErr.message}`;
+        }
       } else {
         replyStatus = `✉️ *Email marked as read.*`;
       }
     } else if (isArchiveCommand) {
       if (decryptedRefreshToken && emailRow.gmail_message_id) {
-        await archiveEmail(decryptedRefreshToken, emailRow.gmail_message_id);
-        replyStatus = `📥 *Email archived in Gmail.*`;
+        try {
+          await archiveEmail(decryptedRefreshToken, emailRow.gmail_message_id);
+          replyStatus = `📥 *Email archived in Gmail.*`;
+        } catch (archiveErr: any) {
+          replyStatus = `❌ *Failed to archive:* ${archiveErr.message}`;
+        }
       } else {
         replyStatus = `📥 *Email archived.*`;
       }
