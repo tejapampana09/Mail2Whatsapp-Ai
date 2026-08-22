@@ -28,7 +28,7 @@ jobs:
         run: npm run lint
 
       - name: Execute Test Suite
-        run: npm test --if-present
+        run: npm test
 
       - name: Build Frontend & Backend
         run: npm run build
@@ -36,12 +36,11 @@ jobs:
   deploy:
     name: Continuous Deployment to AWS EC2
     needs: validate
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
 
     steps:
       - name: Deploy to AWS EC2 via Native SSH
-        continue-on-error: true
         env:
           SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
           EC2_HOST: whatsapp2mail.duckdns.org
@@ -66,9 +65,9 @@ jobs:
               cd /home/ubuntu/mail2whatsapp-ai
             fi
             export NODE_OPTIONS='--max-old-space-size=1024'
-            git pull origin master
+            git pull origin main
             npm install --production=false --no-audit --prefer-offline
             npm run build
-            pm2 reload mail2whatsapp || pm2 restart mail2whatsapp || true
+            pm2 reload mail2whatsapp || pm2 restart mail2whatsapp
             echo '✅ Deployment successfully completed!'
           "

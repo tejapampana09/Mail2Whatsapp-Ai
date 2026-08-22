@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
@@ -23,6 +24,8 @@ import {
   saveGoogleAccountToken,
   deleteGoogleAccountToken,
   updateOAuthAccountStatus,
+  createOAuthState,
+  consumeOAuthState,
   getSettings,
   saveSettings,
   getEmails,
@@ -86,6 +89,13 @@ startOutboxWorker();
 
 const app = express();
 
+// Proxy Configuration
+if (env.TRUST_PROXY === 'true' || env.TRUST_PROXY === '1') {
+  app.set('trust proxy', 1);
+} else if (env.TRUST_PROXY !== 'false') {
+  app.set('trust proxy', env.TRUST_PROXY);
+}
+
 // 3. Request ID & Metrics Middleware
 app.use(requestIdMiddleware);
 
@@ -119,18 +129,34 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Blocked by CORS policy'));
+      callback(null, false);
     }
   },
   credentials: true
 }));
 
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({
+  limit: '2mb',
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
-// 6. Global In-Memory Rate Limiter
+// 6. Global In-Memory Rate Limiter with Periodic Garbage Collection
 const rateLimitWindowMs = 15 * 60 * 1000;
 const rateLimitMaxRequests = 1000;
 const ipRequestCounts = new Map<string, { count: number; resetTime: number }>();
+
+// Periodic memory pruning to prevent heap leaks
+const rateLimitCleaner = setInterval(() => {
+  const now = Date.now();
+  for (const [ip, record] of ipRequestCounts.entries()) {
+    if (now > record.resetTime) {
+      ipRequestCounts.delete(ip);
+    }
+  }
+}, 5 * 60 * 1000);
+rateLimitCleaner.unref();
 
 function rateLimiter(req: express.Request, res: express.Response, next: express.NextFunction) {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
@@ -355,24 +381,28 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
     await addLog(userId, 'INFO', 'GOOGLE_OAUTH', `User "${userEmail}" connected successfully via Google OAuth.`);
 
-    // Check if this is an "add additional account" flow
-    const state = req.query.state as string || '';
-    if (state.startsWith('add_account:')) {
-      const [, existingUserId, existingJwt] = state.split(':');
-      if (existingUserId) {
-        await saveGoogleAccountToken({
-          userId: existingUserId,
-          provider: 'google',
-          gmailEmail: userEmail,
-          access_token: accessToken,
-          refresh_token: tokens.refresh_token || undefined,
-          expiry_date: tokens.expiry_date || undefined,
-          scope: tokens.scope || undefined,
-          token_type: tokens.token_type || undefined
-        });
-        await addLog(existingUserId, 'INFO', 'GOOGLE_OAUTH', `Additional Gmail account "${userEmail}" connected.`);
-        return res.redirect(`/?token=${existingJwt || ''}&account_added=true`);
+    // Check if this is an authenticated "add additional account" flow
+    const rawState = (req.query.state as string || '').trim();
+    if (rawState) {
+      const consumedState = await consumeOAuthState(rawState, 'add_account');
+      if (!consumedState) {
+        logger.warn({ type: 'OAUTH_SECURITY', description: 'Invalid, replayed, or expired OAuth state token rejected.' });
+        return res.status(400).send('Invalid or expired OAuth state parameter. Please try connecting again from Settings.');
       }
+
+      const existingUserId = consumedState.userId;
+      await saveGoogleAccountToken({
+        userId: existingUserId,
+        provider: 'google',
+        gmailEmail: userEmail,
+        access_token: accessToken,
+        refresh_token: tokens.refresh_token || undefined,
+        expiry_date: tokens.expiry_date || undefined,
+        scope: tokens.scope || undefined,
+        token_type: tokens.token_type || undefined
+      });
+      await addLog(existingUserId, 'INFO', 'GOOGLE_OAUTH', `Additional Gmail account "${userEmail}" connected securely.`);
+      return res.redirect('/?account_added=true');
     }
 
     res.redirect(`/?token=${jwtToken}`);
@@ -382,11 +412,12 @@ app.get('/api/auth/google/callback', async (req, res) => {
   }
 });
 
-// Multi-Account OAuth Linking
-app.get('/api/auth/google/add-account', authenticateToken, (req: AuthenticatedRequest, res) => {
+// Multi-Account OAuth Linking (Protected with Single-Use Server-Side State)
+app.get('/api/auth/google/add-account', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
+    const stateToken = await createOAuthState(req.user!.id, 'add_account', 5 * 60 * 1000);
     const authUrl = getAuthUrl();
-    const urlWithState = authUrl + `&state=add_account:${req.user!.id}:${req.query.token}`;
+    const urlWithState = authUrl + `&state=${encodeURIComponent(stateToken)}`;
     res.redirect(urlWithState);
   } catch (err: any) {
     res.status(500).json({ error: 'Cannot generate Google OAuth URL.' });
@@ -939,6 +970,28 @@ app.get('/webhook/whatsapp', (req, res) => {
 
 app.post('/webhook/whatsapp', async (req, res) => {
   try {
+    const signature = req.headers['x-hub-signature-256'] as string;
+    const metaSecret = env.META_APP_SECRET;
+
+    // Cryptographic HMAC SHA-256 signature verification
+    if (metaSecret && !metaSecret.includes('replace_me')) {
+      if (!signature || !signature.startsWith('sha256=')) {
+        logger.warn({ type: 'WEBHOOK_SECURITY', description: 'WhatsApp webhook rejected: Missing or invalid X-Hub-Signature-256 header format.' });
+        return res.status(401).send('Unauthorized: Signature missing or invalid format.');
+      }
+
+      const rawBody = (req as any).rawBody || Buffer.from(JSON.stringify(req.body));
+      const expectedSignature = 'sha256=' + crypto.createHmac('sha256', metaSecret).update(rawBody).digest('hex');
+
+      const sigBuffer = Buffer.from(signature);
+      const expectedBuffer = Buffer.from(expectedSignature);
+
+      if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+        logger.warn({ type: 'WEBHOOK_SECURITY', description: 'WhatsApp webhook signature mismatch / tampering detected.' });
+        return res.status(403).send('Forbidden: Invalid HMAC signature.');
+      }
+    }
+
     const body = req.body;
     if (body.object !== 'whatsapp_business_account') return res.sendStatus(404);
 
@@ -957,6 +1010,16 @@ app.post('/webhook/whatsapp', async (req, res) => {
     let emailRow: any = null;
     if (context && context.id) {
       emailRow = await getEmailByWhatsAppMessageId(context.id);
+      if (emailRow) {
+        // Enforce phone authorization check: sender must own this email
+        const userSettings = await getSettings(emailRow.user_id);
+        const cleanFrom = fromNumber.replace(/[^\d]/g, '');
+        const cleanSetting = (userSettings?.whatsapp_number || '').replace(/[^\d]/g, '');
+        if (!cleanSetting || cleanFrom.slice(-10) !== cleanSetting.slice(-10)) {
+          logger.warn({ type: 'WEBHOOK_AUTH', description: `Unauthorized WhatsApp reply attempt for user ${emailRow.user_id} from ${fromNumber}. Blocked.` });
+          return res.status(200).send('EVENT_RECEIVED');
+        }
+      }
     } else {
       const cleanMsg = msgText.toLowerCase();
       const isCommand = msgText.startsWith('/reply ') || cleanMsg === '/read' || cleanMsg === '/archive' || cleanMsg === '/summary';
@@ -1012,29 +1075,57 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     res.status(200).send('EVENT_RECEIVED');
   } catch (err: any) {
+    logger.error({ type: 'WEBHOOK_ERR', description: `WhatsApp webhook execution error: ${err.message}` });
     res.status(200).send('EVENT_RECEIVED');
   }
 });
 
 app.post('/webhook/gmail', async (req, res) => {
   try {
+    const authHeader = req.headers['authorization'] as string;
+    const tokenQuery = req.query.token as string || req.headers['x-pubsub-verification-token'] as string;
+
+    // Secure PubSub verification if token configured
+    if (env.PUBSUB_VERIFICATION_TOKEN && !env.PUBSUB_VERIFICATION_TOKEN.includes('replace_me')) {
+      const isBearer = typeof authHeader === 'string' && authHeader.startsWith('Bearer ');
+      const isTokenMatch = tokenQuery === env.PUBSUB_VERIFICATION_TOKEN;
+      if (!isBearer && !isTokenMatch) {
+        logger.warn({ type: 'PUBSUB_AUTH', description: 'Unauthorized Gmail Pub/Sub webhook trigger attempt rejected.' });
+        return res.status(401).send('Unauthorized PubSub webhook');
+      }
+    }
+
     const body = req.body;
     if (!body?.message?.data) return res.status(200).send('OK');
 
-    const rawData = Buffer.from(body.message.data, 'base64').toString('utf8');
-    const notification = JSON.parse(rawData);
-    const emailAddress = notification.emailAddress;
+    let rawData = '';
+    try {
+      rawData = Buffer.from(body.message.data, 'base64').toString('utf8');
+    } catch {
+      return res.status(200).send('OK');
+    }
 
+    let notification: any = null;
+    try {
+      notification = JSON.parse(rawData);
+    } catch {
+      return res.status(200).send('OK');
+    }
+
+    const emailAddress = notification?.emailAddress;
     if (!emailAddress) return res.status(200).send('OK');
 
     const database = await getDb();
     const user = database.prepare('SELECT id FROM users WHERE email = ?').get(emailAddress) as { id: string } | undefined;
     if (user) {
-      runSyncForUser(user.id).catch(() => {});
+      runSyncForUser(user.id).catch((err) => {
+        logger.error({ type: 'PUBSUB_SYNC', description: `PubSub sync failed for user ${user.id}: ${err.message}` });
+      });
     }
 
     res.status(200).send('OK');
-  } catch {
+  } catch (pubSubErr: any) {
+    logger.error({ type: 'PUBSUB_ERR', description: `Gmail webhook exception: ${pubSubErr.message}` });
     res.status(200).send('OK');
   }
 });

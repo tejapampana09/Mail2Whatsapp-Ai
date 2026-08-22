@@ -10,12 +10,14 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('production'),
   DATABASE_PATH: z.string().default('mail2whatsapp.db'),
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters for security.'),
+  DB_ENCRYPTION_KEY: z.string().min(32, 'DB_ENCRYPTION_KEY must be at least 32 characters for AES-256 security.'),
 
   // LLM Provider Configurations
   LLM_PROVIDER: z.enum(['google', 'gemini', 'openrouter', 'openai']).default('google'),
   LLM_API_KEY: z.string().min(1, 'LLM_API_KEY is required.'),
-  LLM_MODEL: z.string().default('gemini-flash-latest'),
+  LLM_MODEL: z.string().default('gemini-2.5-flash'),
   OPENROUTER_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
 
   // Google OAuth Credentials
   GOOGLE_CLIENT_ID: z.string().min(1, 'GOOGLE_CLIENT_ID is required.'),
@@ -25,12 +27,21 @@ const envSchema = z.object({
   // WhatsApp Meta Cloud API
   WHATSAPP_ACCESS_TOKEN: z.string().min(1, 'WHATSAPP_ACCESS_TOKEN is required.'),
   WHATSAPP_PHONE_NUMBER_ID: z.string().min(1, 'WHATSAPP_PHONE_NUMBER_ID is required.'),
+  META_APP_SECRET: z.string().optional(),
   WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().default('mail2whatsapp_secure_webhook_token_2026'),
   WHATSAPP_TEMPLATE_NAME: z.string().optional(),
   WHATSAPP_TEMPLATE_LANG: z.string().default('en'),
   WHATSAPP_DIGEST_TEMPLATE_NAME: z.string().optional(),
   WHATSAPP_DIGEST_TEMPLATE_LANG: z.string().default('en'),
-  WHATSAPP_VOICE_ENABLED: z.string().default('true'),
+  WHATSAPP_VOICE_ENABLED: z.string().default('false'),
+  TTS_PROVIDER: z.enum(['none', 'openai', 'google']).default('none'),
+
+  // Google Pub/Sub Webhook Security
+  PUBSUB_AUDIENCE: z.string().optional(),
+  PUBSUB_VERIFICATION_TOKEN: z.string().optional(),
+
+  // Network & Reverse Proxy Topologies
+  TRUST_PROXY: z.string().default('false'),
 
   // Redis Queue Configurations (Optional, gracefully falls back)
   REDIS_URL: z.string().optional(),
@@ -49,12 +60,15 @@ function parseEnvironment() {
       NODE_ENV: 'test',
       DATABASE_PATH: ':memory:',
       JWT_SECRET: process.env.JWT_SECRET || 'test_jwt_secret_minimum_16_characters_2026',
+      DB_ENCRYPTION_KEY: process.env.DB_ENCRYPTION_KEY || 'test_db_encryption_key_minimum_32_characters_long_2026',
       LLM_API_KEY: process.env.LLM_API_KEY || 'test_mock_llm_api_key_2026',
       GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || 'test_google_client_id.apps.googleusercontent.com',
       GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || 'test_google_client_secret',
       GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/auth/google/callback',
       WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || 'test_whatsapp_access_token_2026',
-      WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '123456789012345'
+      WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '123456789012345',
+      META_APP_SECRET: process.env.META_APP_SECRET || 'test_meta_app_secret_2026',
+      PUBSUB_VERIFICATION_TOKEN: process.env.PUBSUB_VERIFICATION_TOKEN || 'test_pubsub_token_2026'
     });
   }
 
@@ -70,6 +84,7 @@ function parseEnvironment() {
     return envSchema.parse({
       ...process.env,
       JWT_SECRET: process.env.JWT_SECRET || 'dev_secret_fallback_minimum_16_characters_key_2026',
+      DB_ENCRYPTION_KEY: process.env.DB_ENCRYPTION_KEY || 'dev_encryption_key_minimum_32_characters_long_2026',
       LLM_API_KEY: process.env.LLM_API_KEY || 'missing_llm_key',
       GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || 'missing_google_id',
       GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || 'missing_google_secret',

@@ -10,6 +10,12 @@ let isRedisAvailable = false;
 export function getRedisClient(): Redis | null {
   if (redisClient) return redisClient;
 
+  // Only attempt Redis connection if explicitly configured
+  const redisEnabled = env.REDIS_URL || process.env.REDIS_ENABLED === 'true';
+  if (!redisEnabled) {
+    return null;
+  }
+
   try {
     const redisOptions: any = env.REDIS_URL 
       ? env.REDIS_URL 
@@ -20,10 +26,10 @@ export function getRedisClient(): Redis | null {
           maxRetriesPerRequest: null,
           enableReadyCheck: false,
           retryStrategy: (times: number) => {
-            if (times > 3) {
-              return null; // Stop retrying after 3 attempts in standalone mode
+            if (times > 2) {
+              return null; // Stop retrying quickly if Redis is not running
             }
-            return Math.min(times * 1000, 3000);
+            return 1000;
           }
         };
 
@@ -40,7 +46,7 @@ export function getRedisClient(): Redis | null {
     });
 
     return redisClient;
-  } catch (err) {
+  } catch {
     isRedisAvailable = false;
     return null;
   }
@@ -56,6 +62,12 @@ let whatsappOutboxQueue: Queue | null = null;
 let gmailSyncQueue: Queue | null = null;
 
 export function initQueues() {
+  const redisEnabled = env.REDIS_URL || process.env.REDIS_ENABLED === 'true';
+  if (!redisEnabled) {
+    console.log('[Queue] Redis background queue not enabled. Running with native SQLite persistent outbox worker.');
+    return;
+  }
+
   const client = getRedisClient();
   if (!client) return;
 
@@ -77,7 +89,7 @@ export function initQueues() {
 
     console.log('BullMQ Queues initialized: [email-processing, whatsapp-outbox, gmail-sync].');
   } catch (err: any) {
-    console.warn('[Queue] Running with native in-memory worker fallback (Redis disabled):', err.message);
+    console.warn('[Queue] Running with native SQLite persistent outbox fallback:', err.message);
   }
 }
 

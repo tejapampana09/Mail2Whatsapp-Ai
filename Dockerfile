@@ -10,6 +10,7 @@ RUN npm ci
 
 COPY . .
 RUN npm run build
+RUN npm prune --production
 
 # Stage 2: Runtime image
 FROM node:22-alpine AS runner
@@ -22,8 +23,7 @@ ENV NODE_ENV=production
 ENV PORT=3000
 
 COPY package*.json ./
-RUN npm ci --only=production
-
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.ts ./
 COPY --from=builder /app/ai.ts ./

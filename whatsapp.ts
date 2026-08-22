@@ -190,6 +190,15 @@ async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolea
 // ----------------------------------------------------
 // Outbox Enqueuing & Direct Immediate Dispatch
 // ----------------------------------------------------
+export function sanitizeWhatsAppParam(val: string, maxLen = 300): string {
+  if (!val) return '';
+  return val
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, maxLen);
+}
+
 export async function sendWhatsAppAlert(
   toNumber: string,
   emailDetails: { from: string; subject: string; category: string; importance: string; summary: string },
@@ -227,11 +236,11 @@ export async function sendWhatsAppAlert(
         {
           type: 'body',
           parameters: [
-            { type: 'text', text: emailDetails.from.substring(0, 60) },
-            { type: 'text', text: emailDetails.subject.substring(0, 80) },
-            { type: 'text', text: emailDetails.category },
-            { type: 'text', text: emailDetails.importance },
-            { type: 'text', text: emailDetails.summary.substring(0, 300) }
+            { type: 'text', text: sanitizeWhatsAppParam(emailDetails.from, 60) },
+            { type: 'text', text: sanitizeWhatsAppParam(emailDetails.subject, 80) },
+            { type: 'text', text: sanitizeWhatsAppParam(emailDetails.category, 30) },
+            { type: 'text', text: sanitizeWhatsAppParam(emailDetails.importance, 20) },
+            { type: 'text', text: sanitizeWhatsAppParam(emailDetails.summary, 300) }
           ]
         }
       ]
@@ -244,7 +253,7 @@ export async function sendWhatsAppAlert(
   const idempotencyKey = 'whatsapp:' + (options?.userId || 'system') + ':' + (options?.emailEventId || Date.now());
 
   if (options?.userId) {
-    await createOutboxJob({
+    const outboxRecord = await createOutboxJob({
       userId: options.userId,
       emailEventId: options.emailEventId,
       phoneNumber: cleanNumber,
@@ -253,6 +262,11 @@ export async function sendWhatsAppAlert(
       payload,
       idempotencyKey
     });
+
+    if (outboxRecord.isDuplicate) {
+      console.log(`[WhatsApp] Event ${options.emailEventId} already queued in outbox (idempotency key: ${idempotencyKey}). Preventing duplicate send.`);
+      return { status: 'Sent' };
+    }
   }
 
   let result = await executeMetaGraphDispatch(payload);
@@ -301,7 +315,7 @@ export async function sendWhatsAppDigest(
   };
 
   const top3Str = stats.topSubjects.length > 0
-    ? stats.topSubjects.map((s, i) => (i + 1) + '. ' + s.substring(0, 45)).join(' | ')
+    ? stats.topSubjects.map((s, i) => (i + 1) + '. ' + sanitizeWhatsAppParam(s, 45)).join(' | ')
     : 'None';
 
   if (digestTemplateName) {
@@ -343,56 +357,16 @@ export async function sendWhatsAppDigest(
 }
 
 export async function sendWhatsAppVoiceSummary(
-  toNumber: string,
-  summaryText: string
+  _toNumber: string,
+  _summaryText: string
 ): Promise<WhatsAppSendResult> {
-  if (!checkWhatsAppConfig()) return { status: 'Disabled', error: 'WhatsApp not configured.' };
-  const cleanNumber = normalizeWhatsAppNumber(toNumber);
-  if (!cleanNumber) return { status: 'Failed', error: 'Invalid number.' };
-
-  const token = env.WHATSAPP_ACCESS_TOKEN;
-  const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
-
-  try {
-    const ttsUrl = 'https://translate.google.com/translate_tts?ie=UTF-8&q=' + encodeURIComponent(summaryText.substring(0, 180)) + '&tl=en&client=tw-ob';
-    const ttsRes = await fetch(ttsUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      signal: AbortSignal.timeout(10000)
-    });
-
-    if (!ttsRes.ok) throw new Error('TTS fetch failed with HTTP ' + ttsRes.status);
-    const audioBuffer = await ttsRes.arrayBuffer();
-
-    const form = new FormData();
-    form.append('file', new Blob([audioBuffer], { type: 'audio/mpeg' }), 'summary.mp3');
-    form.append('type', 'audio/mpeg');
-    form.append('messaging_product', 'whatsapp');
-
-    const uploadRes = await fetch('https://graph.facebook.com/v20.0/' + phoneId + '/media', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + token },
-      body: form,
-      signal: AbortSignal.timeout(15000)
-    });
-
-    if (!uploadRes.ok) throw new Error('Media upload failed: ' + (await uploadRes.text()));
-    const uploadData = await uploadRes.json();
-    const mediaId = uploadData.id;
-
-    const audioPayload = {
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: cleanNumber,
-      type: 'audio',
-      audio: { id: mediaId }
-    };
-
-    const sendRes = await executeMetaGraphDispatch(audioPayload);
-    if (sendRes.success) return { status: 'Sent', messageId: sendRes.messageId };
-    return { status: 'Failed', error: sendRes.error };
-  } catch (err: any) {
-    return { status: 'Failed', error: err.message };
+  // Unofficial translate_tts endpoint removed for privacy and security compliance.
+  // Voice summary is gracefully disabled unless an enterprise authenticated TTS provider is configured.
+  if (env.TTS_PROVIDER === 'none' || env.WHATSAPP_VOICE_ENABLED !== 'true') {
+    return { status: 'Disabled', error: 'Voice summaries are disabled or require an authenticated TTS provider.' };
   }
+
+  return { status: 'Disabled', error: 'Enterprise TTS provider not configured.' };
 }
 
 // ----------------------------------------------------

@@ -4,36 +4,66 @@ import { env } from './config/env.config';
 
 let db: any = null;
 
-const ENCRYPTION_ALGORITHM = 'aes-256-cbc';
+const GCM_ALGORITHM = 'aes-256-gcm';
+const CBC_ALGORITHM = 'aes-256-cbc';
 
 function getEncryptionKey(): Buffer {
+  const secret = env.DB_ENCRYPTION_KEY || env.JWT_SECRET;
+  return crypto.createHash('sha256').update(secret).digest();
+}
+
+function getLegacyEncryptionKey(): Buffer {
   const secret = env.JWT_SECRET;
   return crypto.createHash('sha256').update(secret).digest();
 }
 
 export function encryptText(text: string): string {
   if (!text) return '';
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, getEncryptionKey(), iv);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(GCM_ALGORITHM, getEncryptionKey(), iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  return iv.toString('hex') + ':' + encrypted;
+  const authTag = cipher.getAuthTag();
+  return 'v2:' + iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
 }
 
 export function decryptText(encryptedText: string): string {
   if (!encryptedText) return '';
+
+  // Format v2: Authenticated AES-256-GCM
+  if (encryptedText.startsWith('v2:')) {
+    try {
+      const parts = encryptedText.split(':');
+      if (parts.length !== 4) {
+        throw new Error('Malformed v2 ciphertext structure.');
+      }
+      const [, ivHex, tagHex, cipherHex] = parts;
+      const iv = Buffer.from(ivHex, 'hex');
+      const authTag = Buffer.from(tagHex, 'hex');
+      const decipher = crypto.createDecipheriv(GCM_ALGORITHM, getEncryptionKey(), iv);
+      decipher.setAuthTag(authTag);
+      let decrypted = decipher.update(cipherHex, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+      return decrypted;
+    } catch (err: any) {
+      console.error('[Crypto] AES-256-GCM authentication/decryption failure:', err.message);
+      throw new Error('Failed to authenticate and decrypt ciphertext.');
+    }
+  }
+
+  // Legacy Format: AES-256-CBC with JWT_SECRET fallback for crash-safe rolling migration
   try {
     const parts = encryptedText.split(':');
-    if (parts.length < 2) return '';
+    if (parts.length < 2) throw new Error('Malformed legacy ciphertext.');
     const iv = Buffer.from(parts.shift()!, 'hex');
     const encrypted = parts.join(':');
-    const decipher = crypto.createDecipheriv(ENCRYPTION_ALGORITHM, getEncryptionKey(), iv);
+    const decipher = crypto.createDecipheriv(CBC_ALGORITHM, getLegacyEncryptionKey(), iv);
     let decrypted = decipher.update(encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
-  } catch (err) {
-    console.error('Failed to decrypt text:', err);
-    return '';
+  } catch (legacyErr: any) {
+    console.error('[Crypto] Legacy CBC decryption failure:', legacyErr.message);
+    throw new Error('Failed to decrypt legacy ciphertext.');
   }
 }
 
@@ -53,6 +83,7 @@ class MemoryDatabaseMock {
         let tableName = 'general';
         if (lowerSql.includes('whatsapp_outbox')) tableName = 'whatsapp_outbox';
         else if (lowerSql.includes('email_events')) tableName = 'email_events';
+        else if (lowerSql.includes('oauth_states')) tableName = 'oauth_states';
         else if (lowerSql.includes('users')) tableName = 'users';
         else if (lowerSql.includes('oauth_tokens')) tableName = 'oauth_tokens';
         else if (lowerSql.includes('settings')) tableName = 'settings';
@@ -60,6 +91,30 @@ class MemoryDatabaseMock {
         else if (lowerSql.includes('logs')) tableName = 'logs';
 
         const list = memory.get(tableName) || [];
+
+        if (lowerSql.includes("update oauth_states") && lowerSql.includes("set consumed = 1")) {
+          const targetToken = args[0];
+          const target = list.find(x => x.token === targetToken && x.consumed === 0);
+          if (target) {
+            target.consumed = 1;
+            return { changes: 1 };
+          }
+          return { changes: 0 };
+        }
+
+        if (lowerSql.includes('insert into oauth_states')) {
+          const item = {
+            token: args[0],
+            user_id: args[1],
+            purpose: args[2],
+            expires_at: args[3],
+            consumed: 0,
+            created_at: args[4]
+          };
+          list.push(item);
+          memory.set(tableName, list);
+          return { changes: 1 };
+        }
 
         if (lowerSql.includes("update whatsapp_outbox") && lowerSql.includes("set status = 'processing'")) {
           const targetId = args[1];
@@ -132,6 +187,7 @@ class MemoryDatabaseMock {
         let tableName = 'general';
         if (lowerSql.includes('whatsapp_outbox')) tableName = 'whatsapp_outbox';
         else if (lowerSql.includes('email_events')) tableName = 'email_events';
+        else if (lowerSql.includes('oauth_states')) tableName = 'oauth_states';
         else if (lowerSql.includes('users')) tableName = 'users';
         else if (lowerSql.includes('oauth_tokens')) tableName = 'oauth_tokens';
         else if (lowerSql.includes('settings')) tableName = 'settings';
@@ -139,6 +195,13 @@ class MemoryDatabaseMock {
         else if (lowerSql.includes('logs')) tableName = 'logs';
 
         const list = memory.get(tableName) || [];
+
+        if (lowerSql.includes('from oauth_states') && lowerSql.includes('where token = ?')) {
+          const token = args[0];
+          const purpose = args[1] || 'add_account';
+          const now = args[2] || Date.now();
+          return list.find(x => x.token === token && x.purpose === purpose && x.consumed === 0 && x.expires_at > now) || null;
+        }
 
         if (lowerSql.includes('where idempotency_key = ?')) {
           const key = args[0];
@@ -358,6 +421,24 @@ export async function initDb(): Promise<any> {
     ON logs(user_id, created_at DESC)
   `);
 
+  // 9. OAuth States Table (Server-side single-use state verification)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS oauth_states (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      purpose TEXT NOT NULL DEFAULT 'add_account',
+      expires_at INTEGER NOT NULL,
+      consumed INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_oauth_states_lookup
+    ON oauth_states(token, consumed, expires_at)
+  `);
+
   return db;
 }
 
@@ -533,6 +614,43 @@ export async function updateOAuthAccountStatus(tokenId: string, status: 'ACTIVE'
     'UPDATE oauth_tokens SET status = ?, last_error = ?, updated_at = ? WHERE id = ?'
   );
   stmt.run(status, errorMsg || null, now, tokenId);
+}
+
+// OAuth State Verification Methods
+export async function createOAuthState(userId: string, purpose = 'add_account', ttlMs = 5 * 60 * 1000): Promise<string> {
+  const database = await getDb();
+  const token = crypto.randomBytes(32).toString('hex');
+  const now = Date.now();
+  const expiresAt = now + ttlMs;
+  const createdAt = new Date(now).toISOString();
+
+  const stmt = database.prepare(
+    `INSERT INTO oauth_states (token, user_id, purpose, expires_at, consumed, created_at)
+     VALUES (?, ?, ?, ?, 0, ?)`
+  );
+  stmt.run(token, userId, purpose, expiresAt, createdAt);
+  return token;
+}
+
+export async function consumeOAuthState(token: string, purpose = 'add_account'): Promise<{ userId: string } | null> {
+  if (!token || typeof token !== 'string') return null;
+  const database = await getDb();
+  const now = Date.now();
+
+  const state = database.prepare(
+    `SELECT * FROM oauth_states
+     WHERE token = ? AND purpose = ? AND consumed = 0 AND expires_at > ?`
+  ).get(token, purpose, now) as any;
+
+  if (!state) return null;
+
+  const updateStmt = database.prepare(
+    'UPDATE oauth_states SET consumed = 1 WHERE token = ? AND consumed = 0'
+  );
+  const result = updateStmt.run(token);
+  if (result.changes === 0) return null;
+
+  return { userId: state.user_id };
 }
 
 // Settings DB Methods
@@ -984,10 +1102,19 @@ export async function updateEmailReadStatus(id: string, isRead: boolean) {
 }
 
 export async function getUserIdByWhatsAppNumber(whatsappNumber: string): Promise<string | null> {
+  if (!whatsappNumber || typeof whatsappNumber !== 'string') return null;
+  const clean = whatsappNumber.replace(/[^\d]/g, '').trim();
+  if (clean.length < 10) return null;
+
   const database = await getDb();
-  const stmt = database.prepare('SELECT user_id FROM settings WHERE whatsapp_number LIKE ?');
-  const clean = whatsappNumber.replace(/[^\d]/g, '');
-  const suffix = '%' + clean.slice(-10);
+  const last10 = clean.slice(-10);
+  const suffix = '%' + last10;
+
+  const stmt = database.prepare(
+    `SELECT user_id FROM settings
+     WHERE length(replace(replace(replace(whatsapp_number, '+', ''), '-', ''), ' ', '')) >= 10
+       AND replace(replace(replace(whatsapp_number, '+', ''), '-', ''), ' ', '') LIKE ?`
+  );
   const row = stmt.get(suffix) as any;
   return row ? row.user_id : null;
 }

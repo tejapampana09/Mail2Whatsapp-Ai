@@ -43,4 +43,25 @@ describe('Failure Injection & Crash Recovery Tests', () => {
     const recoveredRow = db.prepare('SELECT status FROM whatsapp_outbox WHERE id = ?').get(job.id) as any;
     assert.strictEqual(recoveredRow.status, 'PENDING');
   });
+
+  test('Simulate WhatsApp 429 Rate Limit: classify as transient with backoff retry', async () => {
+    const { classifyWhatsAppError } = await import('../../whatsapp');
+    const classified = classifyWhatsAppError(429, { message: 'Rate limit hit' });
+    assert.strictEqual(classified.isTransient, true);
+  });
+
+  test('Simulate WhatsApp 500/503 Upstream Server Outage: classify as transient with retry', async () => {
+    const { classifyWhatsAppError } = await import('../../whatsapp');
+    const classified500 = classifyWhatsAppError(500, { message: 'Meta internal error' });
+    assert.strictEqual(classified500.isTransient, true);
+
+    const classified503 = classifyWhatsAppError(503, { message: 'Service unavailable' });
+    assert.strictEqual(classified503.isTransient, true);
+  });
+
+  test('Simulate WhatsApp 401 Auth Revocation: classify as non-transient permanent failure', async () => {
+    const { classifyWhatsAppError } = await import('../../whatsapp');
+    const classified = classifyWhatsAppError(401, { code: 190, message: 'Invalid OAuth token' });
+    assert.strictEqual(classified.isTransient, false);
+  });
 });
