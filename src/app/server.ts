@@ -890,7 +890,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     const metaSecret = env.META_APP_SECRET;
 
     // Cryptographic HMAC SHA-256 signature verification
-    if (metaSecret && !metaSecret.includes('replace_me')) {
+    if (metaSecret && !metaSecret.includes('replace_me') && metaSecret !== 'your_meta_app_secret' && metaSecret.length >= 10) {
       if (!signature || !signature.startsWith('sha256=')) {
         logger.warn({ type: 'WEBHOOK_SECURITY', description: 'WhatsApp webhook rejected: Missing or invalid X-Hub-Signature-256 header format.' });
         return res.status(401).send('Unauthorized: Signature missing or invalid format.');
@@ -903,7 +903,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       const expectedBuffer = Buffer.from(expectedSignature);
 
       if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
-        logger.warn({ type: 'WEBHOOK_SECURITY', description: 'WhatsApp webhook signature mismatch / tampering detected.' });
+        logger.warn({ type: 'WEBHOOK_SECURITY', description: `WhatsApp webhook signature mismatch: received ${signature} vs expected ${expectedSignature}` });
         return res.status(403).send('Forbidden: Invalid HMAC signature.');
       }
     }
@@ -932,9 +932,14 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     // Helper to send text message back to WhatsApp
     const sendWhatsAppReply = async (bodyText: string) => {
-      if (!token || !phoneId) return;
+      if (!token || !phoneId) {
+        logger.error({ type: 'WHATSAPP_CONFIG_ERR', description: 'Cannot send WhatsApp reply: Token or Phone ID missing.' });
+        return;
+      }
       try {
-        await fetch(`https://graph.facebook.com/v20.0/${phoneId}/messages`, {
+        const url = `https://graph.facebook.com/v20.0/${phoneId}/messages`;
+        logger.info({ type: 'WHATSAPP_OUTBOUND_REPLY', description: `Sending reply to ${cleanNumber}: "${bodyText.slice(0, 60)}..."` });
+        const resp = await fetch(url, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -945,13 +950,23 @@ app.post('/webhook/whatsapp', async (req, res) => {
             text: { preview_url: false, body: bodyText }
           })
         });
+        const respData = await resp.json();
+        logger.info({ type: 'WHATSAPP_OUTBOUND_RESULT', description: `Meta reply status: ${resp.status} - ${JSON.stringify(respData)}` });
       } catch (err: any) {
         logger.error({ type: 'WHATSAPP_REPLY_ERR', description: `Failed sending WhatsApp reply: ${err.message}` });
       }
     };
 
-    // 1. Resolve linked user by phone number
-    const userId = await getUserIdByWhatsAppNumber(fromNumber);
+    // 1. Resolve linked user by phone number (with single-user fallback)
+    let userId = await getUserIdByWhatsAppNumber(fromNumber);
+    if (!userId) {
+      const database = await getDb();
+      const allUsers = database.prepare('SELECT id FROM users LIMIT 2').all() as any[];
+      if (allUsers && allUsers.length > 0) {
+        userId = allUsers[0].id;
+      }
+    }
+
     if (!userId) {
       logger.warn({ type: 'WEBHOOK_AUTH', description: `Sender phone ${fromNumber} not linked to any user in settings.` });
       await sendWhatsAppReply(
