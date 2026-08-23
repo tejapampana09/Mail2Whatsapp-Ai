@@ -22,12 +22,17 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm rebuild better-sqlite3
 
       - name: Typecheck / Lint
         run: npm run lint
 
       - name: Execute Test Suite
+        env:
+          NODE_ENV: test
+          CI: "true"
         run: npm test
 
       - name: Build Frontend & Backend
