@@ -59,6 +59,7 @@ export function isRedisConnected(): boolean {
 let emailProcessingQueue: Queue | null = null;
 let whatsappOutboxQueue: Queue | null = null;
 let gmailSyncQueue: Queue | null = null;
+let whatsappOutboxWorker: Worker | null = null;
 
 export function initQueues() {
   const redisEnabled = env.REDIS_URL || process.env.REDIS_ENABLED === 'true';
@@ -71,22 +72,36 @@ export function initQueues() {
   if (!client) return;
 
   try {
-    const connection = {
-      host: env.REDIS_HOST || '127.0.0.1',
-      port: env.REDIS_PORT || 6379,
-      password: env.REDIS_PASSWORD || undefined,
-      maxRetriesPerRequest: null,
-      enableReadyCheck: false
-    };
+    const connection = env.REDIS_URL
+      ? (() => {
+          const url = new URL(env.REDIS_URL);
+          return {
+            host: url.hostname,
+            port: Number(url.port || 6379),
+            username: url.username || undefined,
+            password: url.password || undefined,
+            db: url.pathname && url.pathname !== '/' ? Number(url.pathname.slice(1)) : undefined,
+            tls: url.protocol === 'rediss:' ? {} : undefined,
+            maxRetriesPerRequest: null,
+            enableReadyCheck: false
+          };
+        })()
+      : {
+          host: env.REDIS_HOST || '127.0.0.1',
+          port: env.REDIS_PORT || 6379,
+          password: env.REDIS_PASSWORD || undefined,
+          maxRetriesPerRequest: null,
+          enableReadyCheck: false
+        };
 
     emailProcessingQueue = new Queue('email-processing', { connection });
     whatsappOutboxQueue = new Queue('whatsapp-outbox', { connection });
     gmailSyncQueue = new Queue('gmail-sync', { connection });
 
     // BullMQ WhatsApp Outbox Worker
-    new Worker('whatsapp-outbox', async (_job) => {
+    whatsappOutboxWorker = new Worker('whatsapp-outbox', async (_job) => {
       await processOutboxBatch();
-    }, { connection, concurrency: 2 });
+    }, { connection, concurrency: 1 });
 
     console.log('BullMQ Queues initialized: [email-processing, whatsapp-outbox, gmail-sync].');
   } catch (err: any) {
@@ -120,5 +135,6 @@ export async function closeQueues() {
   if (emailProcessingQueue) await emailProcessingQueue.close();
   if (whatsappOutboxQueue) await whatsappOutboxQueue.close();
   if (gmailSyncQueue) await gmailSyncQueue.close();
+  if (whatsappOutboxWorker) { await whatsappOutboxWorker.close(); whatsappOutboxWorker = null; }
   if (redisClient) await redisClient.quit();
 }

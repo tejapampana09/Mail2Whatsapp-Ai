@@ -58,6 +58,7 @@ async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolea
 
 let isBatchRunning = false;
 let hasPendingRerun = false;
+let workerStarted = false;
 
 export async function processOutboxBatch(): Promise<{ processed: number; sent: number; retried: number; failed: number }> {
   if (isBatchRunning) {
@@ -159,7 +160,8 @@ export async function processOutboxBatch(): Promise<{ processed: number; sent: n
 let outboxInterval: NodeJS.Timeout | null = null;
 
 export function startOutboxWorker() {
-  if (outboxInterval) return;
+  if (outboxInterval || workerStarted) return;
+  workerStarted = true;
   resetStaleOutboxJobs(env.WHATSAPP_STALE_TIMEOUT_MS).catch(() => {});
   
   outboxInterval = setInterval(async () => {
@@ -177,4 +179,5 @@ export function stopOutboxWorker() {
     clearInterval(outboxInterval);
     outboxInterval = null;
   }
+  workerStarted = false;
 }

@@ -43,8 +43,8 @@ const envSchema = z.object({
   WHATSAPP_STALE_TIMEOUT_MS: z.coerce.number().default(180000),
 
   // Google Pub/Sub Webhook Security (Cryptographic OIDC JWT Only)
-  PUBSUB_AUDIENCE: z.string().optional().transform(val => (val && val.trim().length > 0 ? val.trim() : 'https://whatsapp2mail.duckdns.org/webhook/gmail')),
-  PUBSUB_SERVICE_ACCOUNT: z.string().optional().transform(val => (val && val.trim().length > 0 ? val.trim() : 'mail2whatsapp-pubsub@mail2whatsapp.iam.gserviceaccount.com')),
+  PUBSUB_AUDIENCE: z.string().trim().url('PUBSUB_AUDIENCE must be a valid URL.').optional(),
+  PUBSUB_SERVICE_ACCOUNT: z.string().trim().email('PUBSUB_SERVICE_ACCOUNT must be a valid service-account email.').optional(),
 
   // Network & Reverse Proxy Topologies
   TRUST_PROXY: z.string().default('false'),
@@ -74,9 +74,20 @@ function parseEnvironment() {
       WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || 'test_whatsapp_access_token_2026',
       WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '123456789012345',
       META_APP_SECRET: process.env.META_APP_SECRET || 'test_meta_app_secret_2026',
-      PUBSUB_AUDIENCE: process.env.PUBSUB_AUDIENCE || 'https://whatsapp2mail.duckdns.org/webhook/gmail',
-      PUBSUB_SERVICE_ACCOUNT: process.env.PUBSUB_SERVICE_ACCOUNT || 'mail2whatsapp-pubsub@mail2whatsapp.iam.gserviceaccount.com'
+      PUBSUB_AUDIENCE: process.env.PUBSUB_AUDIENCE,
+      PUBSUB_SERVICE_ACCOUNT: process.env.PUBSUB_SERVICE_ACCOUNT
     });
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    const missingProductionPubSub = [
+      !process.env.PUBSUB_AUDIENCE?.trim() ? 'PUBSUB_AUDIENCE' : null,
+      !process.env.PUBSUB_SERVICE_ACCOUNT?.trim() ? 'PUBSUB_SERVICE_ACCOUNT' : null
+    ].filter(Boolean) as string[];
+
+    if (missingProductionPubSub.length > 0) {
+      throw new Error(`Production startup refused: ${missingProductionPubSub.join(', ')} must be explicitly configured.`);
+    }
   }
 
   const result = envSchema.safeParse(process.env);
@@ -95,8 +106,8 @@ function parseEnvironment() {
       GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/auth/google/callback',
       WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || 'missing_whatsapp_token',
       WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || 'missing_phone_id',
-      PUBSUB_AUDIENCE: process.env.PUBSUB_AUDIENCE || 'https://whatsapp2mail.duckdns.org/webhook/gmail',
-      PUBSUB_SERVICE_ACCOUNT: process.env.PUBSUB_SERVICE_ACCOUNT || 'mail2whatsapp-pubsub@mail2whatsapp.iam.gserviceaccount.com'
+      PUBSUB_AUDIENCE: process.env.PUBSUB_AUDIENCE,
+      PUBSUB_SERVICE_ACCOUNT: process.env.PUBSUB_SERVICE_ACCOUNT
     });
   }
   return result.data;
