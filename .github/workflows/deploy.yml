@@ -95,15 +95,12 @@ jobs:
             npm install --production=false --no-audit --prefer-offline
             npm run build
 
-            # 4. Ensure PM2 & tsx are globally available in active Node environment
-            npm install -g pm2 tsx || true
-
-            # 5. Clean restart PM2 process
+            # 4. Clean start PM2 process using official ecosystem config
             pm2 delete mail2whatsapp 2>/dev/null || true
-            pm2 start "npx tsx src/app/server.ts" --name "mail2whatsapp" --update-env
+            pm2 start ecosystem.config.cjs
             pm2 save || true
 
-            # 6. Verify local health check
+            # 5. Verify local health check
             echo "🔍 Verifying local application health..."
             sleep 4
             pm2 list
