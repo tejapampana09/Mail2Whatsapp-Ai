@@ -43,6 +43,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Deploy to AWS EC2 via Native SSH
         env:
           SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
