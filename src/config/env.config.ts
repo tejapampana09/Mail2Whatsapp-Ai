@@ -43,8 +43,8 @@ const envSchema = z.object({
   WHATSAPP_STALE_TIMEOUT_MS: z.coerce.number().default(180000),
 
   // Google Pub/Sub Webhook Security (Cryptographic OIDC JWT Only)
-  PUBSUB_AUDIENCE: z.string().optional(),
-  PUBSUB_SERVICE_ACCOUNT: z.string().optional(),
+  PUBSUB_AUDIENCE: z.string().default('https://whatsapp2mail.duckdns.org/webhook/gmail'),
+  PUBSUB_SERVICE_ACCOUNT: z.string().default('mail2whatsapp-pubsub@mail2whatsapp.iam.gserviceaccount.com'),
 
   // Network & Reverse Proxy Topologies
   TRUST_PROXY: z.string().default('false'),

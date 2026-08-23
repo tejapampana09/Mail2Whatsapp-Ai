@@ -92,6 +92,12 @@ jobs:
             export NODE_OPTIONS='--max-old-space-size=1024'
             git fetch origin master
             git reset --hard origin/master
+
+            # Ensure .env on EC2 has PubSub security configurations
+            touch .env
+            grep -q "^PUBSUB_AUDIENCE=" .env || echo "PUBSUB_AUDIENCE=https://whatsapp2mail.duckdns.org/webhook/gmail" >> .env
+            grep -q "^PUBSUB_SERVICE_ACCOUNT=" .env || echo "PUBSUB_SERVICE_ACCOUNT=mail2whatsapp-pubsub@mail2whatsapp.iam.gserviceaccount.com" >> .env
+
             npm install --production=false --no-audit --prefer-offline
             npm run build
 
