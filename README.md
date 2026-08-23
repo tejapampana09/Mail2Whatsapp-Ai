@@ -11,7 +11,7 @@ Intelligent, real-time Gmail inbox prioritization, LLM analysis, and resilient M
 
 ---
 
-## 2. Architecture
+## 2. Architecture & Reliability Hierarchy
 
 ```mermaid
 flowchart TD
@@ -31,10 +31,12 @@ flowchart TD
     M -- 429 / 5xx --> O[Exponential Backoff + Jitter: PENDING]
     M -- 401 / Max Retries --> P[Status: DEAD_LETTER]
     
-    subgraph Asynchronous Orchestration
+    subgraph Optional Acceleration Layer
         Q[Redis / BullMQ Queue] -.-> K
     end
 ```
+
+> **Authoritative Durability Guarantee**: SQLite (`email_events` + `whatsapp_outbox` in WAL mode) is the primary, durable source of truth guaranteeing at-least-once delivery and zero data loss. Redis & BullMQ act as an optional acceleration and distribution layer that gracefully falls back to the native SQLite outbox when Redis is not running.
 
 ---
 

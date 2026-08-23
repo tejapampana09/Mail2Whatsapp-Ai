@@ -26,6 +26,11 @@ export async function verifyPubSubOidcToken(authHeader: string | undefined): Pro
 
   // Cryptographic Google OIDC JWT Verification only
   try {
+    if (env.NODE_ENV === 'production' && (!env.PUBSUB_AUDIENCE || !env.PUBSUB_SERVICE_ACCOUNT)) {
+      logger.error({ type: 'PUBSUB_AUTH', description: 'Pub/Sub rejected: PUBSUB_AUDIENCE and PUBSUB_SERVICE_ACCOUNT must be configured in production.' });
+      return { valid: false, error: 'Pub/Sub audience and service account configuration required in production' };
+    }
+
     const audience = env.PUBSUB_AUDIENCE || undefined;
     const ticket = await authClient.verifyIdToken({
       idToken: token,
@@ -44,13 +49,16 @@ export async function verifyPubSubOidcToken(authHeader: string | undefined): Pro
       return { valid: false, error: 'Invalid token issuer' };
     }
 
-    // Verify Service Account Identity if configured
+    // Verify Service Account Identity strictly
     if (env.PUBSUB_SERVICE_ACCOUNT && !env.PUBSUB_SERVICE_ACCOUNT.includes('replace_me')) {
       const email = payload.email;
       if (!email || email !== env.PUBSUB_SERVICE_ACCOUNT) {
         logger.warn({ type: 'PUBSUB_AUTH', description: 'Pub/Sub JWT rejected: Service account mismatch' });
         return { valid: false, error: 'Service account identity mismatch' };
       }
+    } else if (env.NODE_ENV === 'production') {
+      logger.error({ type: 'PUBSUB_AUTH', description: 'Pub/Sub JWT rejected: Service account not verified in production' });
+      return { valid: false, error: 'Service account identity verification required' };
     }
 
     return { valid: true, email: payload.email };

@@ -436,22 +436,22 @@ export async function initDb(): Promise<any> {
   ensureColumn('email_events', 'snippet', 'TEXT');
   ensureColumn('email_events', 'content', 'TEXT');
   ensureColumn('email_events', 'attachments', 'TEXT');
-  ensureColumn('email_events', 'status', 'TEXT DEFAULT "RECEIVED"');
+  ensureColumn('email_events', 'status', "TEXT DEFAULT 'RECEIVED'");
   ensureColumn('email_events', 'idempotency_key', 'TEXT');
 
   // 3. Migrate oauth_tokens table
   ensureColumn('oauth_tokens', 'gmail_email', 'TEXT');
-  ensureColumn('oauth_tokens', 'status', 'TEXT DEFAULT "ACTIVE"');
+  ensureColumn('oauth_tokens', 'status', "TEXT DEFAULT 'ACTIVE'");
   ensureColumn('oauth_tokens', 'last_sync_at', 'TEXT');
   ensureColumn('oauth_tokens', 'last_successful_sync_at', 'TEXT');
   ensureColumn('oauth_tokens', 'last_error', 'TEXT');
 
   // 4. Migrate settings table
   ensureColumn('settings', 'analyze_limit', 'INTEGER DEFAULT 10');
-  ensureColumn('settings', 'ai_provider', 'TEXT DEFAULT "google"');
+  ensureColumn('settings', 'ai_provider', "TEXT DEFAULT 'google'");
 
   // 5. Migrate emails table
-  ensureColumn('emails', 'created_at', 'TEXT DEFAULT ""');
+  ensureColumn('emails', 'created_at', "TEXT DEFAULT ''");
 
   return db;
 }
@@ -500,7 +500,7 @@ export async function getOAuthToken(userId: string, provider = 'google') {
 
   if (!token) {
     token = database.prepare(
-      'SELECT * FROM oauth_tokens WHERE user_id = ? AND provider = ? AND status = "ACTIVE" ORDER BY rowid ASC LIMIT 1'
+      "SELECT * FROM oauth_tokens WHERE user_id = ? AND provider = ? AND status = 'ACTIVE' ORDER BY rowid ASC LIMIT 1"
     ).get(userId, provider);
   }
 

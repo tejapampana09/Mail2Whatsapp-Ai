@@ -15,6 +15,7 @@ import { rateLimiter } from '../middleware/rate-limit.middleware';
 import { metricsService } from '../services/metrics/metrics.service';
 import { initQueues } from '../services/queue/queue.service';
 import { verifyPubSubOidcToken } from '../services/pubsub/pubsub-auth.service';
+import { startAutomatedBackupScheduler } from '../services/backup/backup.service';
 import { setupGracefulShutdown } from './shutdown';
 
 import {
@@ -90,9 +91,10 @@ initDb().then(() => {
   logger.error({ type: 'DB_INIT', description: `Failed to initialize database: ${err.message}` });
 });
 
-// 2. Initialize Queues and Outbox Worker
+// 2. Initialize Queues, Outbox Worker & Automated Backup Scheduler
 initQueues();
 startOutboxWorker();
+startAutomatedBackupScheduler();
 
 const app = express();
 
@@ -117,9 +119,18 @@ app.use((_req, res, next) => {
   next();
 });
 
-// 4. Helmet Security Headers
+// 4. Helmet Security Headers with Production CSP
 app.use(helmet({
-  contentSecurityPolicy: false
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+      imgSrc: ["'self'", 'data:', 'https://*.googleusercontent.com', 'https://*.fbcdn.net'],
+      connectSrc: ["'self'", 'https://whatsapp2mail.duckdns.org', 'https://accounts.google.com', 'https://oauth2.googleapis.com', 'http://localhost:3000', 'http://localhost:5173']
+    }
+  }
 }));
 
 // 5. Whitelisted CORS Configuration
@@ -149,7 +160,7 @@ app.use(express.json({
   }
 }));
 
-// 6. Global In-Memory Rate Limiter
+// 6. Global In-Memory / Redis Rate Limiter
 app.use(rateLimiter);
 
 // ----------------------------------------------------
@@ -164,7 +175,7 @@ app.get('/health/live', (_req, res) => {
   });
 });
 
-app.get('/health/ready', async (_req, res) => {
+app.get('/health/ready', async (req, res) => {
   try {
     const database = await getDb();
     database.prepare('SELECT 1').get();
@@ -175,10 +186,11 @@ app.get('/health/ready', async (_req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (err: any) {
+    logger.error({ type: 'HEALTH_CHECK_ERR', description: `Readiness check failed: ${err.message}` });
     res.status(503).json({
       status: 'NOT_READY',
       database: 'disconnected',
-      error: err.message
+      requestId: (req as any).requestId
     });
   }
 });

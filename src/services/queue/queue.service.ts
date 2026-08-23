@@ -74,7 +74,9 @@ export function initQueues() {
     const connection = {
       host: env.REDIS_HOST || '127.0.0.1',
       port: env.REDIS_PORT || 6379,
-      password: env.REDIS_PASSWORD || undefined
+      password: env.REDIS_PASSWORD || undefined,
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false
     };
 
     emailProcessingQueue = new Queue('email-processing', { connection });

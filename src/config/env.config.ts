@@ -57,6 +57,23 @@ const envSchema = z.object({
 
   // CORS Origins
   CORS_ORIGINS: z.string().optional()
+}).superRefine((data, ctx) => {
+  if (data.NODE_ENV === 'production') {
+    if (!data.PUBSUB_AUDIENCE || data.PUBSUB_AUDIENCE.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['PUBSUB_AUDIENCE'],
+        message: 'PUBSUB_AUDIENCE is mandatory in production mode to prevent unauthorized Pub/Sub webhook injection.'
+      });
+    }
+    if (!data.PUBSUB_SERVICE_ACCOUNT || data.PUBSUB_SERVICE_ACCOUNT.trim().length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['PUBSUB_SERVICE_ACCOUNT'],
+        message: 'PUBSUB_SERVICE_ACCOUNT is mandatory in production mode to bind webhooks strictly to your GCP service account.'
+      });
+    }
+  }
 });
 
 function parseEnvironment() {
@@ -73,7 +90,9 @@ function parseEnvironment() {
       GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/auth/google/callback',
       WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || 'test_whatsapp_access_token_2026',
       WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || '123456789012345',
-      META_APP_SECRET: process.env.META_APP_SECRET || 'test_meta_app_secret_2026'
+      META_APP_SECRET: process.env.META_APP_SECRET || 'test_meta_app_secret_2026',
+      PUBSUB_AUDIENCE: process.env.PUBSUB_AUDIENCE || 'https://whatsapp2mail.duckdns.org/webhook/gmail',
+      PUBSUB_SERVICE_ACCOUNT: process.env.PUBSUB_SERVICE_ACCOUNT || 'pubsub-invoker@gcp-project.iam.gserviceaccount.com'
     });
   }
 
@@ -95,7 +114,9 @@ function parseEnvironment() {
       GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || 'missing_google_secret',
       GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/api/auth/google/callback',
       WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || 'missing_whatsapp_token',
-      WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || 'missing_phone_id'
+      WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || 'missing_phone_id',
+      PUBSUB_AUDIENCE: process.env.PUBSUB_AUDIENCE || 'https://whatsapp2mail.duckdns.org/webhook/gmail',
+      PUBSUB_SERVICE_ACCOUNT: process.env.PUBSUB_SERVICE_ACCOUNT || 'pubsub-invoker@gcp-project.iam.gserviceaccount.com'
     });
   }
   return result.data;

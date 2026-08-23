@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
+import { getRedisClient, isRedisConnected } from '../services/queue/queue.service';
 
-const rateLimitWindowMs = 15 * 60 * 1000;
+const rateLimitWindowSeconds = 15 * 60;
+const rateLimitWindowMs = rateLimitWindowSeconds * 1000;
 const rateLimitMaxRequests = 1000;
 const ipRequestCounts = new Map<string, { count: number; resetTime: number }>();
 
@@ -15,8 +17,39 @@ const rateLimitCleaner = setInterval(() => {
 }, 5 * 60 * 1000);
 rateLimitCleaner.unref();
 
-export function rateLimiter(req: Request, res: Response, next: NextFunction) {
+export async function rateLimiter(req: Request, res: Response, next: NextFunction) {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const requestId = (req as any).requestId;
+
+  // 1. Distributed Redis Rate Limiting (Horizontally Scalable)
+  if (isRedisConnected()) {
+    const redis = getRedisClient();
+    if (redis) {
+      try {
+        const key = `ratelimit:${ip}`;
+        const currentCount = await redis.incr(key);
+        if (currentCount === 1) {
+          await redis.expire(key, rateLimitWindowSeconds);
+        }
+
+        if (currentCount > rateLimitMaxRequests) {
+          return res.status(429).json({
+            success: false,
+            error: {
+              code: 'RATE_LIMIT_EXCEEDED',
+              message: 'Too many requests. Please try again later.',
+              requestId
+            }
+          });
+        }
+        return next();
+      } catch {
+        // Fallback to local memory if Redis call fails
+      }
+    }
+  }
+
+  // 2. In-Memory Process Rate Limiter (Fallback)
   const now = Date.now();
   
   let record = ipRequestCounts.get(ip);
@@ -33,7 +66,7 @@ export function rateLimiter(req: Request, res: Response, next: NextFunction) {
       error: {
         code: 'RATE_LIMIT_EXCEEDED',
         message: 'Too many requests. Please try again later.',
-        requestId: (req as any).requestId
+        requestId
       }
     });
   }

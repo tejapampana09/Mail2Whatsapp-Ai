@@ -56,82 +56,104 @@ async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolea
   }
 }
 
+let isBatchRunning = false;
+let hasPendingRerun = false;
+
 export async function processOutboxBatch(): Promise<{ processed: number; sent: number; retried: number; failed: number }> {
-  metricsService.increment('worker_runs_total');
-  await resetStaleOutboxJobs(env.WHATSAPP_STALE_TIMEOUT_MS);
-
-  const pendingJobs = await getPendingOutboxJobs(env.WHATSAPP_BATCH_SIZE);
-  let processed = 0;
-  let sent = 0;
-  let retried = 0;
-  let failed = 0;
-  const workerId = 'worker_' + process.pid + '_' + Date.now();
-
-  for (const job of pendingJobs) {
-    const claimed = await claimOutboxJob(job.id, workerId, 60000);
-    if (!claimed) continue;
-
-    processed++;
-    let payload: any = null;
-    try {
-      payload = JSON.parse(job.payload);
-    } catch {
-      await updateOutboxJobStatus(job.id, 'DEAD_LETTER', { lastError: 'Malformed payload JSON' });
-      failed++;
-      continue;
-    }
-
-    const startTime = Date.now();
-    let dispatchResult = await executeMetaGraphDispatch(payload);
-    metricsService.recordLatency(Date.now() - startTime);
-
-    if (!dispatchResult.success && payload.type === 'template' && (dispatchResult.error?.includes('132018') || dispatchResult.error?.includes('132001'))) {
-      const fallbackText = payload.template?.components?.[0]?.parameters?.[4]?.text || 'Urgent Email Notification';
-      payload = {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: job.phone_number,
-        type: 'text',
-        text: { preview_url: false, body: `📬 *Email Alert*\n━━━━━━━━━━━━━━━\n${fallbackText}\n━━━━━━━━━━━━━━━\n🤖 _Mail2WhatsApp AI_` }
-      };
-      dispatchResult = await executeMetaGraphDispatch(payload);
-    }
-
-    if (dispatchResult.success) {
-      await updateOutboxJobStatus(job.id, 'SENT', {
-        providerMessageId: dispatchResult.messageId
-      });
-      metricsService.increment('whatsapp_sent_total');
-      sent++;
-    } else {
-      const nextAttemptCount = job.attempt_count + 1;
-      const isTransient = dispatchResult.isTransient !== false;
-
-      if (isTransient && nextAttemptCount <= env.WHATSAPP_MAX_RETRIES) {
-        // Exponential backoff with randomized jitter
-        const baseDelay = Math.min(15 * 60 * 1000, 5000 * Math.pow(2, nextAttemptCount - 1));
-        const jitter = Math.floor(baseDelay * (0.8 + Math.random() * 0.4));
-        const nextAttemptAt = Date.now() + jitter;
-
-        await updateOutboxJobStatus(job.id, 'PENDING', {
-          attemptCount: nextAttemptCount,
-          nextAttemptAt,
-          lastError: dispatchResult.error
-        });
-        metricsService.increment('whatsapp_retry_total');
-        retried++;
-      } else {
-        await updateOutboxJobStatus(job.id, 'DEAD_LETTER', {
-          attemptCount: nextAttemptCount,
-          lastError: dispatchResult.error
-        });
-        metricsService.increment('whatsapp_failed_total');
-        failed++;
-      }
-    }
+  if (isBatchRunning) {
+    hasPendingRerun = true;
+    return { processed: 0, sent: 0, retried: 0, failed: 0 };
   }
 
-  return { processed, sent, retried, failed };
+  isBatchRunning = true;
+
+  try {
+    metricsService.increment('worker_runs_total');
+    await resetStaleOutboxJobs(env.WHATSAPP_STALE_TIMEOUT_MS);
+
+    const pendingJobs = await getPendingOutboxJobs(env.WHATSAPP_BATCH_SIZE);
+    let processed = 0;
+    let sent = 0;
+    let retried = 0;
+    let failed = 0;
+    const workerId = 'worker_' + process.pid + '_' + Date.now();
+
+    for (const job of pendingJobs) {
+      const claimed = await claimOutboxJob(job.id, workerId, 60000);
+      if (!claimed) continue;
+
+      processed++;
+      let payload: any = null;
+      try {
+        payload = JSON.parse(job.payload);
+      } catch {
+        await updateOutboxJobStatus(job.id, 'DEAD_LETTER', { lastError: 'Malformed payload JSON' });
+        failed++;
+        continue;
+      }
+
+      const startTime = Date.now();
+      let dispatchResult = await executeMetaGraphDispatch(payload);
+      metricsService.recordLatency(Date.now() - startTime);
+
+      if (!dispatchResult.success && payload.type === 'template' && (dispatchResult.error?.includes('132018') || dispatchResult.error?.includes('132001'))) {
+        const fallbackText = payload.template?.components?.[0]?.parameters?.[4]?.text || 'Urgent Email Notification';
+        payload = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: job.phone_number,
+          type: 'text',
+          text: { preview_url: false, body: `📬 *Email Alert*\n━━━━━━━━━━━━━━━\n${fallbackText}\n━━━━━━━━━━━━━━━\n🤖 _Mail2WhatsApp AI_` }
+        };
+        dispatchResult = await executeMetaGraphDispatch(payload);
+      }
+
+      if (dispatchResult.success) {
+        await updateOutboxJobStatus(job.id, 'SENT', {
+          providerMessageId: dispatchResult.messageId
+        });
+        metricsService.increment('whatsapp_sent_total');
+        sent++;
+      } else {
+        const nextAttemptCount = job.attempt_count + 1;
+        const isTransient = dispatchResult.isTransient !== false;
+
+        if (isTransient && nextAttemptCount <= env.WHATSAPP_MAX_RETRIES) {
+          // Exponential backoff with randomized jitter
+          const baseDelay = Math.min(15 * 60 * 1000, 5000 * Math.pow(2, nextAttemptCount - 1));
+          const jitter = Math.floor(baseDelay * (0.8 + Math.random() * 0.4));
+          const nextAttemptAt = Date.now() + jitter;
+
+          await updateOutboxJobStatus(job.id, 'PENDING', {
+            attemptCount: nextAttemptCount,
+            nextAttemptAt,
+            lastError: dispatchResult.error
+          });
+          metricsService.increment('whatsapp_retry_total');
+          retried++;
+        } else {
+          await updateOutboxJobStatus(job.id, 'DEAD_LETTER', {
+            attemptCount: nextAttemptCount,
+            lastError: dispatchResult.error
+          });
+          metricsService.increment('whatsapp_failed_total');
+          failed++;
+        }
+      }
+    }
+
+    return { processed, sent, retried, failed };
+  } finally {
+    isBatchRunning = false;
+    if (hasPendingRerun) {
+      hasPendingRerun = false;
+      setImmediate(() => {
+        processOutboxBatch().catch((err) => {
+          console.error('[Outbox Worker] Pending batch rerun exception:', err.message);
+        });
+      });
+    }
+  }
 }
 
 let outboxInterval: NodeJS.Timeout | null = null;

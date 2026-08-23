@@ -19,7 +19,7 @@
   "dependencies": {
     "@google-cloud/pubsub": "^5.3.1",
     "@google/genai": "latest",
-    "better-sqlite3": "^11.1.2",
+    "better-sqlite3": "^13.0.3",
     "bullmq": "^6.2.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
