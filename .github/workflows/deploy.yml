@@ -95,6 +95,8 @@ jobs:
 
             # Ensure .env on EC2 has PubSub security configurations
             touch .env
+            sed -i '/^PUBSUB_SERVICE_ACCOUNT=$/d' .env 2>/dev/null || true
+            sed -i '/^PUBSUB_AUDIENCE=$/d' .env 2>/dev/null || true
             grep -q "^PUBSUB_AUDIENCE=" .env || echo "PUBSUB_AUDIENCE=https://whatsapp2mail.duckdns.org/webhook/gmail" >> .env
             grep -q "^PUBSUB_SERVICE_ACCOUNT=" .env || echo "PUBSUB_SERVICE_ACCOUNT=mail2whatsapp-pubsub@mail2whatsapp.iam.gserviceaccount.com" >> .env
 
