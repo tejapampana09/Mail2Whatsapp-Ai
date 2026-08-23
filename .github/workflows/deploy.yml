@@ -108,14 +108,21 @@ jobs:
             pm2 start ecosystem.config.cjs
             pm2 save || true
 
-            # 5. Verify local health check
+            # 5. Verify local health check with retry polling
             echo "🔍 Verifying local application health..."
-            sleep 4
-            pm2 list
-            if curl -f -s http://127.0.0.1:3000/health/live >/dev/null; then
-              echo "✅ Local service is healthy and responding on port 3000!"
-            else
-              echo "⚠️ Health check failed. Outputting recent PM2 logs:"
+            HEALTHY=0
+            for i in $(seq 1 15); do
+              sleep 2
+              if curl -f -s http://127.0.0.1:3000/health/live >/dev/null || curl -f -s http://localhost:3000/health/live >/dev/null; then
+                echo "✅ Local service is healthy and responding on port 3000 (attempt $i/15)!"
+                HEALTHY=1
+                break
+              fi
+              echo "⏳ Waiting for service to finish initializing (attempt $i/15)..."
+            done
+
+            if [ $HEALTHY -ne 1 ]; then
+              echo "⚠️ Health check timed out. Outputting recent PM2 logs:"
               pm2 logs mail2whatsapp --lines 40 --nostream
               exit 1
             fi
