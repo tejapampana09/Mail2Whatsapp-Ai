@@ -62,16 +62,40 @@ jobs:
           ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -i ~/.ssh/deploy_key "$EC2_USER@$EC2_HOST" "
             set -e
             echo '🚀 Starting automated deployment on AWS EC2...'
+
+            # 1. Ensure NVM and Node 22 LTS are active
+            export NVM_DIR=\"\$HOME/.nvm\"
+            [ -s \"\$NVM_DIR/nvm.sh\" ] && \. \"\$NVM_DIR/nvm.sh\"
+
+            if ! command -v node >/dev/null 2>&1 || [ \$(node -v | cut -d'.' -f1 | tr -d 'v') -lt 22 ]; then
+              echo '⚡ Upgrading Node.js to Node 22 LTS on EC2...'
+              if command -v nvm >/dev/null 2>&1; then
+                nvm install 22
+                nvm use 22
+                nvm alias default 22
+              else
+                curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+                sudo apt-get install -y nodejs build-essential
+              fi
+            fi
+
+            echo \"Using Node.js \$(node -v) and npm \$(npm -v) on EC2\"
+
+            # 2. Navigate to project repository
             if [ -d '/home/ubuntu/Mail2Whatsapp-Ai' ]; then
               cd /home/ubuntu/Mail2Whatsapp-Ai
             elif [ -d '/home/ubuntu/mail2whatsapp-ai' ]; then
               cd /home/ubuntu/mail2whatsapp-ai
             fi
+
+            # 3. Pull latest master changes & install dependencies
             export NODE_OPTIONS='--max-old-space-size=1024'
             git fetch origin master
             git reset --hard origin/master
             npm install --production=false --no-audit --prefer-offline
             npm run build
-            pm2 reload mail2whatsapp || pm2 restart mail2whatsapp || pm2 start npm --name "mail2whatsapp" -- run start
+
+            # 4. Reload PM2 process
+            pm2 reload mail2whatsapp || pm2 restart mail2whatsapp || pm2 start npm --name \"mail2whatsapp\" -- run start
             echo '✅ Deployment successfully completed!'
           "
