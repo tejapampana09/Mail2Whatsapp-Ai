@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import Database from 'better-sqlite3';
 import { env } from '../config/env.config';
 import { encryptText, decryptText, getEncryptionKey, getLegacyEncryptionKey } from '../utils/crypto';
 import { normalizeWhatsAppNumber, cleanPhoneNumberDigits } from '../utils/phone';
@@ -185,16 +186,17 @@ export async function initDb(): Promise<any> {
   if (db) return db;
 
   try {
-    const DatabaseConstructor = (await import('better-sqlite3')).default;
     const dbPath = env.DATABASE_PATH || 'mail2whatsapp.db';
-    db = new DatabaseConstructor(dbPath) as any;
+    db = new Database(dbPath) as any;
 
-    db.pragma('journal_mode = WAL');
-    db.pragma('busy_timeout = 5000');
-    db.pragma('synchronous = NORMAL');
+    if (dbPath !== ':memory:') {
+      db.pragma('journal_mode = WAL');
+      db.pragma('busy_timeout = 5000');
+      db.pragma('synchronous = NORMAL');
+    }
     db.pragma('foreign_keys = ON');
   } catch (err: any) {
-    console.warn('[DB] Native better-sqlite3 binding not present. Using resilient in-memory database mock:', err.message);
+    console.warn('[DB] Native better-sqlite3 initialization failed. Using resilient in-memory database mock:', err.message);
     db = new MemoryDatabaseMock() as any;
   }
 
