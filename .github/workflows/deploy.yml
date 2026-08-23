@@ -95,7 +95,25 @@ jobs:
             npm install --production=false --no-audit --prefer-offline
             npm run build
 
-            # 4. Reload PM2 process
-            pm2 reload mail2whatsapp || pm2 restart mail2whatsapp || pm2 start npm --name \"mail2whatsapp\" -- run start
+            # 4. Ensure PM2 & tsx are globally available in active Node environment
+            npm install -g pm2 tsx || true
+
+            # 5. Clean restart PM2 process
+            pm2 delete mail2whatsapp 2>/dev/null || true
+            pm2 start "npx tsx src/app/server.ts" --name "mail2whatsapp" --update-env
+            pm2 save || true
+
+            # 6. Verify local health check
+            echo "🔍 Verifying local application health..."
+            sleep 4
+            pm2 list
+            if curl -f -s http://127.0.0.1:3000/health/live >/dev/null; then
+              echo "✅ Local service is healthy and responding on port 3000!"
+            else
+              echo "⚠️ Health check failed. Outputting recent PM2 logs:"
+              pm2 logs mail2whatsapp --lines 40 --nostream
+              exit 1
+            fi
+
             echo '✅ Deployment successfully completed!'
           "
