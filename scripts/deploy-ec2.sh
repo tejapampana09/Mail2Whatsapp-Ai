@@ -33,12 +33,27 @@ export NODE_OPTIONS='--max-old-space-size=1024'
 git fetch origin master
 git reset --hard origin/master
 
-# Ensure .env on EC2 has PubSub security configurations
-touch .env
-sed -i '/^PUBSUB_SERVICE_ACCOUNT=$/d' .env 2>/dev/null || true
-sed -i '/^PUBSUB_AUDIENCE=$/d' .env 2>/dev/null || true
-grep -q "^PUBSUB_AUDIENCE=" .env || echo "PUBSUB_AUDIENCE=https://whatsapp2mail.duckdns.org/webhook/gmail" >> .env
-grep -q "^PUBSUB_SERVICE_ACCOUNT=" .env || echo "PUBSUB_SERVICE_ACCOUNT=mail2whatsapp-pubsub@mail2whatsapp.iam.gserviceaccount.com" >> .env
+# Validate required production Pub/Sub security configuration.
+# Values must already exist in the EC2 .env file.
+if [ ! -f .env ]; then
+  echo "ERROR: .env file is missing."
+  exit 1
+fi
+
+PUBSUB_AUDIENCE_VALUE="$(grep '^PUBSUB_AUDIENCE=' .env | cut -d '=' -f2-)"
+PUBSUB_SERVICE_ACCOUNT_VALUE="$(grep '^PUBSUB_SERVICE_ACCOUNT=' .env | cut -d '=' -f2-)"
+
+if [ -z "$PUBSUB_AUDIENCE_VALUE" ]; then
+  echo "ERROR: PUBSUB_AUDIENCE is missing from .env."
+  exit 1
+fi
+
+if [ -z "$PUBSUB_SERVICE_ACCOUNT_VALUE" ]; then
+  echo "ERROR: PUBSUB_SERVICE_ACCOUNT is missing from .env."
+  exit 1
+fi
+
+echo "Pub/Sub security configuration verified."
 
 npm install --production=false --no-audit --prefer-offline
 npm run build
