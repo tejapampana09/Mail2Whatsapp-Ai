@@ -10,7 +10,7 @@
     "start": "tsx src/app/server.ts",
     "maintenance": "tsx scripts/maintenance.ts",
     "lint": "tsc --noEmit",
-    "test": "tsx --test --test-concurrency=1 tests/**/*.test.ts"
+    "test": "tsx scripts/run-tests.ts"
   },
   "engines": {
     "node": ">=20.0.0",
