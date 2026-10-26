@@ -5,7 +5,6 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 
 import { env } from '../config/env.config';
 import logger from '../logger.service';
@@ -1221,6 +1220,7 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(path.join(distPath, 'index.html'));
   });
 } else {
+  const { createServer: createViteServer } = await import('vite');
   const vite = await createViteServer({
     root: projectRoot,
     server: { middlewareMode: true },
