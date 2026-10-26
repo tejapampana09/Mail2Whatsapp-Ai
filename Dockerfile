@@ -28,9 +28,9 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/scripts ./scripts
 
-# Create unprivileged application user
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-RUN chown -R appuser:appgroup /app
+# Create unprivileged application user and data directory
+RUN mkdir -p /data && addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN chown -R appuser:appgroup /app /data
 
 USER appuser
 
