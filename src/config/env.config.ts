@@ -86,7 +86,7 @@ function parseEnvironment() {
     ].filter(Boolean) as string[];
 
     if (missingProductionPubSub.length > 0) {
-      throw new Error(`Production startup refused: ${missingProductionPubSub.join(', ')} must be explicitly configured.`);
+      console.warn(`⚠️ Production warning: ${missingProductionPubSub.join(', ')} not configured. Google Pub/Sub push webhooks will be inactive until configured.`);
     }
   }
 

@@ -119,6 +119,14 @@ app.use((_req, res, next) => {
   next();
 });
 
+// 5. Whitelisted CORS Configuration
+const customOrigins = env.CORS_ORIGINS ? env.CORS_ORIGINS.split(',').map(s => s.trim()) : [];
+const defaultOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173'
+];
+const allowedOrigins = Array.from(new Set([...defaultOrigins, ...customOrigins]));
+
 // 4. Helmet Security Headers with Production CSP
 app.use(helmet({
   contentSecurityPolicy: {
@@ -128,19 +136,10 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
       imgSrc: ["'self'", 'data:', 'https://*.googleusercontent.com', 'https://*.fbcdn.net'],
-      connectSrc: ["'self'", 'https://whatsapp2mail.duckdns.org', 'https://accounts.google.com', 'https://oauth2.googleapis.com', 'http://localhost:3000', 'http://localhost:5173']
+      connectSrc: ["'self'", 'https://accounts.google.com', 'https://oauth2.googleapis.com', 'http://localhost:3000', 'http://localhost:5173', ...customOrigins]
     }
   }
 }));
-
-// 5. Whitelisted CORS Configuration
-const defaultOrigins = [
-  'https://whatsapp2mail.duckdns.org',
-  'http://localhost:3000',
-  'http://localhost:5173'
-];
-const customOrigins = env.CORS_ORIGINS ? env.CORS_ORIGINS.split(',').map(s => s.trim()) : [];
-const allowedOrigins = Array.from(new Set([...defaultOrigins, ...customOrigins]));
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -994,7 +993,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     if (!userId) {
       logger.warn({ type: 'WEBHOOK_AUTH', description: `Sender phone ${fromNumber} not linked to any user in settings.` });
       await sendWhatsAppReply(
-        `⚠️ *Phone Number Not Linked*\n\nYour WhatsApp number (${fromNumber}) is not configured in Mail2WhatsApp Settings.\nPlease log in to https://whatsapp2mail.duckdns.org and save your WhatsApp number in Settings.`
+        `⚠️ *Phone Number Not Linked*\n\nYour WhatsApp number (${fromNumber}) is not configured in Mail2WhatsApp Settings.\nPlease log in to your Mail2WhatsApp dashboard and save your WhatsApp number in Settings.`
       );
       return res.status(200).send('EVENT_RECEIVED');
     }

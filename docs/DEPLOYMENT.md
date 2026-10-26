@@ -1,7 +1,7 @@
 # Mail2WhatsApp AI — Production Deployment Guide
 
 ## 1. Prerequisites
-- Ubuntu 22.04 / 24.04 LTS (AWS EC2)
+- Ubuntu 22.04 / 24.04 LTS, Debian, or any Linux VPS / Container
 - Node.js 20 LTS or Docker & Docker Compose
 - Caddy Reverse Proxy with automated Let's Encrypt SSL
 - Meta Developer Account with WhatsApp Cloud API configured

@@ -188,7 +188,7 @@ export async function analyzeEmail(
   };
 
   if (provider === 'openrouter') {
-    headers['HTTP-Referer'] = 'https://whatsapp2mail.duckdns.org';
+    headers['HTTP-Referer'] = env.CORS_ORIGINS?.split(',')[0] || 'https://mail2whatsapp.app';
     headers['X-Title'] = 'Mail2WhatsApp AI Enterprise Gateway';
   }
 
@@ -267,7 +267,7 @@ async function callOpenRouterFallback(
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': 'Bearer ' + apiKey,
-    'HTTP-Referer': 'https://whatsapp2mail.duckdns.org',
+    'HTTP-Referer': env.CORS_ORIGINS?.split(',')[0] || 'https://mail2whatsapp.app',
     'X-Title': 'Mail2WhatsApp AI Daemon'
   };
 
