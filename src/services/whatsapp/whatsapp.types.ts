@@ -22,6 +22,12 @@ export function classifyWhatsAppError(statusCode: number, errorPayload?: any): {
   }
 
   if (statusCode === 400) {
+    if (code === 133010) {
+      return {
+        isTransient: true,
+        message: 'WhatsApp sender account requires registration (#133010). Retrying...'
+      };
+    }
     if (code === 132018) {
       return {
         isTransient: false,

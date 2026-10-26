@@ -8,7 +8,7 @@ import {
 } from '../../database/db';
 import { classifyWhatsAppError } from './whatsapp.types';
 
-async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolean; messageId?: string; error?: string; isTransient?: boolean }> {
+async function executeMetaGraphDispatch(payload: any, allowAutoRegister = true): Promise<{ success: boolean; messageId?: string; error?: string; isTransient?: boolean }> {
   const token = env.WHATSAPP_ACCESS_TOKEN;
   const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
 
@@ -16,7 +16,7 @@ async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolea
     return { success: false, error: 'WhatsApp credentials missing in environment.', isTransient: false };
   }
 
-  const url = 'https://graph.facebook.com/v20.0/' + phoneId + '/messages';
+  const url = 'https://graph.facebook.com/v21.0/' + phoneId + '/messages';
 
   // Ensure recipient phone number is stripped of '+' as required by Meta Cloud API
   if (payload && payload.to && typeof payload.to === 'string') {
@@ -42,6 +42,29 @@ async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolea
     }
 
     if (!res.ok) {
+      // Auto-recovery for code 133010: Attempt automated phone registration
+      if (resJson?.error?.code === 133010 && allowAutoRegister) {
+        console.warn(`[WhatsApp] Account not registered (#133010). Attempting automatic registration for phoneId ${phoneId}...`);
+        try {
+          const regRes = await fetch(`https://graph.facebook.com/v21.0/${phoneId}/register`, {
+            method: 'POST',
+            headers: {
+              'Authorization': 'Bearer ' + token,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ messaging_product: 'whatsapp', pin: '123456' }),
+            signal: AbortSignal.timeout(10000)
+          });
+          const regJson = await regRes.json();
+          if (regRes.ok && regJson?.success) {
+            console.log(`[WhatsApp] Auto-registration succeeded for ${phoneId}. Retrying message dispatch...`);
+            return executeMetaGraphDispatch(payload, false);
+          }
+        } catch (regErr: any) {
+          console.error('[WhatsApp] Auto-registration failed:', regErr.message);
+        }
+      }
+
       const classified = classifyWhatsAppError(res.status, resJson?.error);
       return {
         success: false,
