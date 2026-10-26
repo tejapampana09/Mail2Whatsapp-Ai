@@ -135,9 +135,12 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
       imgSrc: ["'self'", 'data:', 'https://*.googleusercontent.com', 'https://*.fbcdn.net'],
-      connectSrc: ["'self'", 'https://accounts.google.com', 'https://oauth2.googleapis.com', 'http://localhost:3000', 'http://localhost:5173', ...customOrigins]
+      connectSrc: ["'self'", 'https://accounts.google.com', 'https://oauth2.googleapis.com', 'http://localhost:3000', 'http://localhost:5173', ...customOrigins],
+      upgradeInsecureRequests: null
     }
-  }
+  },
+  hsts: false,
+  crossOriginOpenerPolicy: false
 }));
 
 app.use(cors({
