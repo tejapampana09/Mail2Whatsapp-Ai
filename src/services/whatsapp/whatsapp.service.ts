@@ -94,7 +94,7 @@ export async function sendWhatsAppAlert(
   let payload: any = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to: cleanNumber
+    to: cleanNumber.replace(/^\+/, '')
   };
 
   let messageType: 'TEMPLATE_NOTIFICATION' | 'SESSION_MESSAGE' = 'SESSION_MESSAGE';
@@ -166,7 +166,7 @@ export async function sendWhatsAppDigest(
   let payload: any = {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
-    to: cleanNumber
+    to: cleanNumber.replace(/^\+/, '')
   };
 
   const top3Str = stats.topSubjects.length > 0

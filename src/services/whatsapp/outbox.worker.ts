@@ -18,6 +18,11 @@ async function executeMetaGraphDispatch(payload: any): Promise<{ success: boolea
 
   const url = 'https://graph.facebook.com/v20.0/' + phoneId + '/messages';
 
+  // Ensure recipient phone number is stripped of '+' as required by Meta Cloud API
+  if (payload && payload.to && typeof payload.to === 'string') {
+    payload.to = payload.to.replace(/^\+/, '');
+  }
+
   try {
     const res = await fetch(url, {
       method: 'POST',
