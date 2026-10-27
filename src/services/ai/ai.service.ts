@@ -50,9 +50,9 @@ export async function analyzeEmail(
 ): Promise<LLMResult> {
   const provider = customProvider || env.LLM_PROVIDER || 'google';
   const apiKey = env.LLM_API_KEY;
-  let initialModel = customModel || env.LLM_MODEL || 'gemini-3.5-flash';
+  let initialModel = customModel || env.LLM_MODEL || 'gemini-3.1-flash-lite';
   if (initialModel === 'gemini-flash-latest' || initialModel === 'gemini-2.5-flash') {
-    initialModel = 'gemini-3.5-flash';
+    initialModel = 'gemini-3.1-flash-lite';
   }
 
   if (!apiKey || apiKey.includes('replace_me')) {
@@ -121,8 +121,9 @@ export async function analyzeEmail(
           }
         }
 
+        const modelToCall = attempt > 1 && initialModel === 'gemini-3.1-flash-lite' ? 'gemini-3.1-flash-lite-preview' : initialModel;
         const responsePromise = ai.models.generateContent({
-          model: initialModel,
+          model: modelToCall,
           contents,
           config: {
             systemInstruction: systemPrompt,
