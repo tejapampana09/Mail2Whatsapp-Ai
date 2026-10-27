@@ -210,7 +210,7 @@ export async function analyzeEmail(
           { role: 'user', content: userMessage }
         ],
         temperature: 0.1,
-        max_tokens: 500,
+        max_tokens: 1500,
         response_format: { type: 'json_object' }
       };
 
@@ -286,7 +286,7 @@ async function callOpenRouterFallback(
             { role: 'user', content: userMessage }
           ],
           temperature: 0.1,
-          max_tokens: 500,
+          max_tokens: 1500,
           response_format: { type: 'json_object' }
         }),
         signal: AbortSignal.timeout(15000)
