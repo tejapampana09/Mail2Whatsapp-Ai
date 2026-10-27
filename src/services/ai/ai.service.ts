@@ -7,10 +7,11 @@ export { llmResultSchema, getFallbackAnalysis };
 export type { LLMResult };
 
 const OPENROUTER_FALLBACK_MODELS = [
-  'openrouter/free',
-  'google/gemma-2-9b-it:free',
-  'meta-llama/llama-3-8b-instruct:free',
-  'qwen/qwen-2-7b-instruct:free'
+  'nvidia/nemotron-3.5-lightning:free',
+  'liquid/lfm-2.5-2.6b:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'google/gemma-4-31b-it:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
 ];
 
 function repairAndParseJson(rawText: string): any {
@@ -156,7 +157,7 @@ export async function analyzeEmail(
         }
       } catch (err: any) {
         console.error('Google Gen AI attempt ' + attempt + ' failed:', err.message);
-        if (err.status === 404 || err.status === 401 || err.status === 403) {
+        if (err.status === 400 || err.status === 401 || err.status === 403 || err.status === 404 || err.message?.includes('API key not valid')) {
           break;
         }
       }
@@ -271,11 +272,7 @@ async function callOpenRouterFallback(
     'X-Title': 'Mail2WhatsApp AI Daemon'
   };
 
-  const fallbackModels = [
-    'google/gemma-2-9b-it:free',
-    'meta-llama/llama-3-8b-instruct:free',
-    'qwen/qwen-2-7b-instruct:free'
-  ];
+  const fallbackModels = OPENROUTER_FALLBACK_MODELS;
 
   for (const model of fallbackModels) {
     try {
