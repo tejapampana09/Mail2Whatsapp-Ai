@@ -50,9 +50,9 @@ export async function analyzeEmail(
 ): Promise<LLMResult> {
   const provider = customProvider || env.LLM_PROVIDER || 'google';
   const apiKey = env.LLM_API_KEY;
-  let initialModel = customModel || env.LLM_MODEL || 'gemini-2.5-flash';
-  if (initialModel === 'gemini-flash-latest') {
-    initialModel = 'gemini-2.5-flash';
+  let initialModel = customModel || env.LLM_MODEL || 'gemini-3.5-flash';
+  if (initialModel === 'gemini-flash-latest' || initialModel === 'gemini-2.5-flash') {
+    initialModel = 'gemini-3.5-flash';
   }
 
   if (!apiKey || apiKey.includes('replace_me')) {
