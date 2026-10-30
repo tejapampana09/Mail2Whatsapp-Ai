@@ -151,7 +151,8 @@ export async function sendWhatsAppAlert(
 
 export async function sendWhatsAppDigest(
   toNumber: string,
-  stats: { total: number; high: number; medium: number; low: number; categories: Record<string, number>; topSubjects: string[] }
+  stats: { total: number; high: number; medium: number; low: number; categories: Record<string, number>; topSubjects: string[] },
+  options?: { userId?: string }
 ): Promise<WhatsAppSendResult> {
   if (!checkWhatsAppConfig()) {
     return { status: 'Disabled', error: 'WhatsApp credentials not configured.' };
@@ -210,9 +211,10 @@ export async function sendWhatsAppDigest(
 
   const todayKey = new Date().toISOString().slice(0, 10);
   const idempotencyKey = 'digest:' + cleanNumber + ':' + todayKey;
+  const userId = options?.userId || 'system';
 
   await createOutboxJob({
-    userId: 'system',
+    userId,
     phoneNumber: cleanNumber,
     messageType,
     templateName: digestTemplateName || undefined,

@@ -836,6 +836,51 @@ function startSyncDaemon() {
 startSyncDaemon();
 
 // ----------------------------------------------------
+// Proactive WhatsApp Sender Auto-Registration Keep-Alive
+// ----------------------------------------------------
+async function checkAndRegisterWhatsAppSender() {
+  try {
+    const token = env.WHATSAPP_ACCESS_TOKEN;
+    const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
+    if (!token || !phoneId || token.includes('replace_me')) return;
+
+    const res = await fetch(`https://graph.facebook.com/v21.0/${phoneId}?fields=code_verification_status`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+      signal: AbortSignal.timeout(10000)
+    });
+    const data: any = await res.json();
+    if (data?.code_verification_status === 'NOT_VERIFIED') {
+      console.warn(`[WhatsApp KeepAlive] Sender ${phoneId} is NOT_VERIFIED. Auto-registering with Meta...`);
+      const regRes = await fetch(`https://graph.facebook.com/v21.0/${phoneId}/register`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ messaging_product: 'whatsapp', pin: '123456' }),
+        signal: AbortSignal.timeout(10000)
+      });
+      const regData: any = await regRes.json();
+      if (regRes.ok && regData?.success) {
+        console.log(`[WhatsApp KeepAlive] Sender ${phoneId} auto-registered successfully.`);
+      } else {
+        console.error('[WhatsApp KeepAlive] Registration response:', regData);
+      }
+    }
+  } catch (err: any) {
+    console.warn('[WhatsApp KeepAlive] Non-fatal check error:', err.message);
+  }
+}
+
+function startWhatsAppKeepAlive() {
+  console.log('WhatsApp Sender Auto-Registration Keep-Alive daemon activated.');
+  checkAndRegisterWhatsAppSender();
+  setInterval(checkAndRegisterWhatsAppSender, 2 * 60 * 60 * 1000); // Check every 2 hours
+}
+
+startWhatsAppKeepAlive();
+
+// ----------------------------------------------------
 // Daily Digest Scheduler
 // ----------------------------------------------------
 function startDailyDigestScheduler() {
@@ -876,7 +921,7 @@ function startDailyDigestScheduler() {
           topSubjects: emails.filter(e => e.importance === 'High').slice(0, 3).map(e => e.subject)
         };
 
-        const result = await sendWhatsAppDigest(settings.whatsapp_number, stats);
+        const result = await sendWhatsAppDigest(settings.whatsapp_number, stats, { userId });
         if (result.status === 'Sent') {
           await addLog(userId, 'INFO', 'DAILY_DIGEST', `Daily digest sent: ${stats.total} emails, ${stats.high} urgent.`);
         }

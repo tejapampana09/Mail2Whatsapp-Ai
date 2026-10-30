@@ -58,6 +58,7 @@ async function executeMetaGraphDispatch(payload: any, allowAutoRegister = true):
           const regJson = await regRes.json();
           if (regRes.ok && regJson?.success) {
             console.log(`[WhatsApp] Auto-registration succeeded for ${phoneId}. Retrying message dispatch...`);
+            await new Promise(r => setTimeout(r, 1000));
             return executeMetaGraphDispatch(payload, false);
           }
         } catch (regErr: any) {

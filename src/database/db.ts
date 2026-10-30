@@ -210,7 +210,10 @@ export async function initDb(): Promise<any> {
       status TEXT DEFAULT 'ACTIVE',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
-    )
+    );
+
+    INSERT OR IGNORE INTO users (id, email, name, status, created_at, updated_at)
+    VALUES ('system', 'system@internal', 'System Daemon', 'ACTIVE', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
   `);
 
   // 2. OAuth Tokens Table
